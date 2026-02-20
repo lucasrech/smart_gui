@@ -1,3 +1,9 @@
+"""ROS 2 helper node that publishes random Int8 values on random topics.
+
+This node is intended for UI/integration testing, allowing the frontend to
+discover and monitor multiple active topics without requiring a real robot stack.
+"""
+
 import argparse
 import random
 import string
@@ -9,12 +15,21 @@ from std_msgs.msg import Int8
 
 
 def _random_suffix(size: int = 6) -> str:
+    """Generate a short random suffix for topic name uniqueness."""
     chars = string.ascii_lowercase + string.digits
     return "".join(random.choice(chars) for _ in range(size))
 
 
 class RandomInt8TopicsNode(Node):
+    """Create multiple random `std_msgs/msg/Int8` publishers and publish periodically."""
+
     def __init__(self, topic_count: int = 5, publish_hz: float = 5.0) -> None:
+        """Initialize publishers/timer.
+
+        Args:
+            topic_count: Number of random topics to create.
+            publish_hz: Publish frequency in Hz for each topic.
+        """
         super().__init__("random_int8_topics_node")
         self._publishers = []
         self._topics: List[str] = []
@@ -33,6 +48,7 @@ class RandomInt8TopicsNode(Node):
             self.get_logger().info(f"Publishing on: {topic_name}")
 
     def _on_timer(self) -> None:
+        """Publish one random Int8 message on each configured topic."""
         for publisher, topic_name in zip(self._publishers, self._topics):
             msg = Int8()
             msg.data = random.randint(-128, 127)
@@ -41,6 +57,7 @@ class RandomInt8TopicsNode(Node):
 
 
 def main() -> None:
+    """CLI entrypoint used by `ros2 run smart_gui random_int8_topics`."""
     parser = argparse.ArgumentParser(
         description="Publish random Int8 values on random topic names."
     )

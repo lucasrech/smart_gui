@@ -1,3 +1,10 @@
+"""ROS 2 + FastAPI backend used by Smart GUI.
+
+This module exposes HTTP and WebSocket endpoints to inspect and interact with a
+running ROS 2 graph. It also includes topic publishing utilities, including
+backend-managed publish loops to avoid per-message frontend HTTP traffic.
+"""
+
 import argparse
 import asyncio
 import base64
@@ -22,6 +29,7 @@ from rosidl_runtime_py.utilities import get_message, get_service
 import uvicorn
 
 
+# Curated list shown in frontend topic-creation UI by package namespace.
 SUPPORTED_TOPIC_MESSAGE_TYPES: Dict[str, List[str]] = {
     "std_msgs": [
         "std_msgs/msg/Bool",
@@ -62,12 +70,16 @@ SUPPORTED_TOPIC_MESSAGE_TYPES: Dict[str, List[str]] = {
 
 
 class TopicLoopPublisher:
+    """Container holding lifecycle primitives for a backend publish-loop worker."""
+
     def __init__(self, stop_event: threading.Event, thread: threading.Thread) -> None:
         self.stop_event = stop_event
         self.thread = thread
 
 
 class Ros2Manager:
+    """Own and coordinate ROS entities used by the API (node, pubs, subs, loops)."""
+
     def __init__(self) -> None:
         self._node = None
         self._executor = None
@@ -79,6 +91,7 @@ class Ros2Manager:
         self._topic_loops: Dict[tuple[str, str], TopicLoopPublisher] = {}
 
     def start(self) -> None:
+        """Initialize ROS context/node and start executor spinning thread once."""
         with self._lock:
             if self._node is not None:
                 return
@@ -90,6 +103,7 @@ class Ros2Manager:
             self._spin_thread.start()
 
     def stop(self) -> None:
+        """Stop loops, destroy ROS entities, and shutdown ROS context."""
         with self._lock:
             if self._node is None:
                 return
@@ -106,32 +120,39 @@ class Ros2Manager:
 
     @staticmethod
     def normalize_topic_name(topic: str) -> str:
+        """Return a canonical topic name with leading slash and basic validation."""
         topic = topic.strip()
         if not topic:
             raise ValueError("topic name cannot be empty")
         return topic if topic.startswith("/") else f"/{topic}"
 
     def list_topics(self) -> List[Dict[str, Any]]:
+        """Return ROS topics and their advertised message types."""
         topics = self._node.get_topic_names_and_types()
         return [{"name": name, "types": types} for name, types in topics]
 
     def list_nodes(self) -> List[Dict[str, Any]]:
+        """Return ROS node names and namespaces currently visible."""
         nodes = self._node.get_node_names_and_namespaces()
         return [{"name": name, "namespace": ns} for name, ns in nodes]
 
     def list_services(self) -> List[Dict[str, Any]]:
+        """Return ROS services and their types currently visible."""
         services = self._node.get_service_names_and_types()
         return [{"name": name, "types": types} for name, types in services]
 
     def create_subscription(self, topic: str, msg_type: str, callback) -> Any:
+        """Create a ROS subscription with a default QoS depth of 10."""
         msg_cls = get_message(msg_type)
         qos = QoSProfile(depth=10)
         return self._node.create_subscription(msg_cls, topic, callback, qos)
 
     def destroy_subscription(self, sub) -> None:
+        """Destroy a previously created ROS subscription."""
         self._node.destroy_subscription(sub)
 
     def get_message_template(self, msg_type: str) -> Dict[str, Any]:
+        """Build a JSON-friendly template for a ROS message type instance."""
         msg_cls = get_message(msg_type)
         template = message_to_ordereddict(msg_cls())
         return {
@@ -145,6 +166,7 @@ class Ros2Manager:
         msg_type: str,
         qos_depth: int = 10,
     ) -> Dict[str, Any]:
+        """Create/reuse a publisher for topic/type and return creation status."""
         topic_name = self.normalize_topic_name(topic_name)
         msg_cls = get_message(msg_type)
         key = (topic_name, msg_type)
@@ -169,6 +191,7 @@ class Ros2Manager:
         message_data: Dict[str, Any],
         qos_depth: int = 10,
     ) -> Dict[str, Any]:
+        """Publish one message on a topic/type, auto-filling header timestamp if present."""
         topic_name = self.normalize_topic_name(topic_name)
         msg_cls = get_message(msg_type)
         key = (topic_name, msg_type)
@@ -204,6 +227,7 @@ class Ros2Manager:
         frequency_hz: float,
         qos_depth: int = 10,
     ) -> Dict[str, Any]:
+        """Start (or replace) a backend thread that publishes at a fixed frequency."""
         if frequency_hz <= 0:
             raise ValueError("frequency_hz must be > 0")
 
@@ -227,6 +251,7 @@ class Ros2Manager:
         stop_event = threading.Event()
 
         def _worker() -> None:
+            """Periodic publisher worker running until stop_event is set."""
             next_publish = time.monotonic()
             while not stop_event.is_set():
                 try:
@@ -272,6 +297,7 @@ class Ros2Manager:
         }
 
     def stop_topic_publish_loop(self, topic_name: str, msg_type: str) -> Dict[str, Any]:
+        """Stop a running backend publish loop for topic/type if present."""
         topic_name = self.normalize_topic_name(topic_name)
         key = (topic_name, msg_type)
 
@@ -296,6 +322,7 @@ class Ros2Manager:
         }
 
     def stop_all_topic_publish_loops(self) -> None:
+        """Stop all currently running backend publish loops."""
         with self._loop_lock:
             loops = list(self._topic_loops.values())
             self._topic_loops.clear()
@@ -306,6 +333,7 @@ class Ros2Manager:
             loop_state.thread.join(timeout=1.0)
 
     def get_service_schema(self, service_name: str, service_type: str) -> Dict[str, Any]:
+        """Return request/response templates for a ROS service type."""
         srv_cls = get_service(service_type)
         request_template = message_to_ordereddict(srv_cls.Request())
         response_template = message_to_ordereddict(srv_cls.Response())
@@ -323,6 +351,7 @@ class Ros2Manager:
         request_data: Dict[str, Any],
         timeout_sec: float = 3.0,
     ) -> Dict[str, Any]:
+        """Call a ROS service synchronously with timeout and JSON payload mapping."""
         srv_cls = get_service(service_type)
         client = self._node.create_client(srv_cls, service_name)
 
@@ -351,6 +380,7 @@ class Ros2Manager:
 
 
 app = FastAPI(title="ROS2 Inspector API", version="0.1.0")
+# Allow frontend access from different hosts/ports during development and LAN usage.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -363,6 +393,8 @@ ros2 = Ros2Manager()
 
 
 class ServiceCallRequest(BaseModel):
+    """HTTP payload model for invoking a ROS service."""
+
     name: str
     service_type: str
     request: Dict[str, Any]
@@ -370,12 +402,16 @@ class ServiceCallRequest(BaseModel):
 
 
 class TopicPublisherRequest(BaseModel):
+    """HTTP payload model for creating/reusing a topic publisher."""
+
     name: str
     message_type: str
     qos_depth: int = 10
 
 
 class TopicPublishRequest(BaseModel):
+    """HTTP payload model for publishing a single topic message."""
+
     name: str
     message_type: str
     message: Dict[str, Any]
@@ -383,6 +419,8 @@ class TopicPublishRequest(BaseModel):
 
 
 class TopicPublishLoopStartRequest(BaseModel):
+    """HTTP payload model for starting backend-managed loop publishing."""
+
     name: str
     message_type: str
     message: Dict[str, Any]
@@ -391,6 +429,8 @@ class TopicPublishLoopStartRequest(BaseModel):
 
 
 class TopicPublishLoopStopRequest(BaseModel):
+    """HTTP payload model for stopping backend-managed loop publishing."""
+
     name: str
     message_type: str
 
@@ -401,6 +441,7 @@ def _compress_ros_image_to_jpeg(
     quality: int = 70,
     max_width: int = 1280,
 ) -> tuple[bytes, Dict[str, Any]]:
+    """Convert `sensor_msgs/msg/Image` payload to JPEG bytes plus metadata."""
     width = int(msg.width)
     height = int(msg.height)
     step = int(msg.step)
@@ -463,21 +504,25 @@ def _compress_ros_image_to_jpeg(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    """FastAPI startup hook to initialize ROS resources."""
     ros2.start()
 
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
+    """FastAPI shutdown hook to release ROS resources."""
     ros2.stop()
 
 
 @app.get("/health")
 def health() -> Dict[str, str]:
+    """Simple health probe endpoint."""
     return {"status": "ok"}
 
 
 @app.get("/")
 def root() -> Dict[str, str]:
+    """Human-readable root endpoint with quick usage hint."""
     return {
         "name": "ROS2 Inspector API",
         "status": "ok",
@@ -493,16 +538,19 @@ def favicon() -> Response:
 
 @app.get("/topics")
 def topics() -> List[Dict[str, Any]]:
+    """List ROS topics and their message types."""
     return ros2.list_topics()
 
 
 @app.get("/topic-message-types")
 def topic_message_types() -> Dict[str, List[str]]:
+    """Return curated message types grouped by package namespace."""
     return SUPPORTED_TOPIC_MESSAGE_TYPES
 
 
 @app.get("/topic-message-template")
 def topic_message_template(message_type: str) -> Dict[str, Any]:
+    """Return JSON template for a message type selected by the frontend."""
     try:
         return ros2.get_message_template(message_type)
     except Exception as err:
@@ -511,6 +559,7 @@ def topic_message_template(message_type: str) -> Dict[str, Any]:
 
 @app.post("/topic-publisher")
 def topic_publisher(payload: TopicPublisherRequest) -> Dict[str, Any]:
+    """Create/reuse a publisher for topic/type."""
     try:
         return ros2.create_topic_publisher(
             topic_name=payload.name,
@@ -523,6 +572,7 @@ def topic_publisher(payload: TopicPublisherRequest) -> Dict[str, Any]:
 
 @app.post("/topic-publish")
 def topic_publish(payload: TopicPublishRequest) -> Dict[str, Any]:
+    """Publish one message on a ROS topic."""
     try:
         result = ros2.publish_topic_message(
             topic_name=payload.name,
@@ -537,6 +587,7 @@ def topic_publish(payload: TopicPublishRequest) -> Dict[str, Any]:
 
 @app.post("/topic-publish-loop/start")
 def topic_publish_loop_start(payload: TopicPublishLoopStartRequest) -> Dict[str, Any]:
+    """Start backend-managed periodic publishing for a topic."""
     try:
         return ros2.start_topic_publish_loop(
             topic_name=payload.name,
@@ -551,6 +602,7 @@ def topic_publish_loop_start(payload: TopicPublishLoopStartRequest) -> Dict[str,
 
 @app.post("/topic-publish-loop/stop")
 def topic_publish_loop_stop(payload: TopicPublishLoopStopRequest) -> Dict[str, Any]:
+    """Stop backend-managed periodic publishing for a topic."""
     try:
         return ros2.stop_topic_publish_loop(
             topic_name=payload.name,
@@ -562,16 +614,19 @@ def topic_publish_loop_stop(payload: TopicPublishLoopStopRequest) -> Dict[str, A
 
 @app.get("/nodes")
 def nodes() -> List[Dict[str, Any]]:
+    """List ROS nodes."""
     return ros2.list_nodes()
 
 
 @app.get("/services")
 def services() -> List[Dict[str, Any]]:
+    """List ROS services and types."""
     return ros2.list_services()
 
 
 @app.get("/service-schema")
 def service_schema(name: str, service_type: str) -> Dict[str, Any]:
+    """Return request/response templates for a service endpoint."""
     try:
         return ros2.get_service_schema(name, service_type)
     except Exception as err:
@@ -580,6 +635,7 @@ def service_schema(name: str, service_type: str) -> Dict[str, Any]:
 
 @app.post("/service-call")
 def service_call(payload: ServiceCallRequest) -> Dict[str, Any]:
+    """Call a ROS service with JSON payload."""
     try:
         response = ros2.call_service(
             service_name=payload.name,
@@ -596,6 +652,7 @@ def service_call(payload: ServiceCallRequest) -> Dict[str, Any]:
 
 @app.websocket("/ws/topics/{topic:path}")
 async def topic_ws(websocket: WebSocket, topic: str) -> None:
+    """Stream messages from a selected ROS topic over WebSocket."""
     await websocket.accept()
 
     topics = ros2.list_topics()
@@ -619,12 +676,14 @@ async def topic_ws(websocket: WebSocket, topic: str) -> None:
     last_image_emit = 0.0
 
     def _enqueue(payload: Dict[str, Any]) -> None:
+        """Drop-old behavior: silently ignore messages when client queue is full."""
         try:
             queue.put_nowait(payload)
         except asyncio.QueueFull:
             pass
 
     def _callback(msg) -> None:
+        """ROS subscription callback that serializes and forwards message payloads."""
         nonlocal last_image_emit
         now = time.time()
 
@@ -685,6 +744,7 @@ async def topic_ws(websocket: WebSocket, topic: str) -> None:
 
 
 def main() -> None:
+    """CLI entrypoint used by `ros2 run smart_gui smart_gui_api`."""
     parser = argparse.ArgumentParser(description="Run Smart GUI ROS2 Inspector API")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)

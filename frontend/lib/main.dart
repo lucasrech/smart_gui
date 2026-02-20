@@ -7,10 +7,18 @@ import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+/// Smart GUI Flutter web client.
+///
+/// Architecture overview:
+/// - Left panel(s): entity discovery (topics/services).
+/// - Right panel(s): live monitor and interaction tools.
+/// - HTTP: graph/service/topic management.
+/// - WebSocket: live topic stream.
 void main() {
   runApp(const RosInspectorApp());
 }
 
+/// Root `MaterialApp` widget and app-wide theme definition.
 class RosInspectorApp extends StatelessWidget {
   const RosInspectorApp({super.key});
 
@@ -28,6 +36,7 @@ class RosInspectorApp extends StatelessWidget {
   }
 }
 
+/// Main page with top-level tabs (Topics, Nodes, Services).
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -35,6 +44,7 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
+/// Holds shared state for tabs, including backend base URL.
 class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   late final String _backendUrl;
   late final TabController _tabController;
@@ -78,6 +88,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 }
 
+/// Topics workspace (list + message viewer/publisher split pane).
 class TopicsPage extends StatefulWidget {
   const TopicsPage({super.key, required this.backendUrl});
 
@@ -87,6 +98,7 @@ class TopicsPage extends StatefulWidget {
   State<TopicsPage> createState() => _TopicsPageState();
 }
 
+/// Tracks selected topic and renders the topic details panel.
 class _TopicsPageState extends State<TopicsPage> {
   Map<String, dynamic>? _selectedTopic;
 
@@ -113,6 +125,7 @@ class _TopicsPageState extends State<TopicsPage> {
   }
 }
 
+/// Left-side topic list with filtering, refresh, favorites, and topic creation.
 class _TopicsList extends StatefulWidget {
   const _TopicsList({required this.backendUrl, required this.onSelect});
 
@@ -123,6 +136,7 @@ class _TopicsList extends StatefulWidget {
   State<_TopicsList> createState() => _TopicsListState();
 }
 
+/// State for topic discovery list and related actions.
 class _TopicsListState extends State<_TopicsList> {
   late Future<List<Map<String, dynamic>>> _future;
   final TextEditingController _searchController = TextEditingController();
@@ -306,6 +320,7 @@ class _TopicsListState extends State<_TopicsList> {
   }
 }
 
+/// Nodes tab page.
 class NodesPage extends StatelessWidget {
   const NodesPage({super.key, required this.backendUrl});
 
@@ -321,6 +336,7 @@ class NodesPage extends StatelessWidget {
   }
 }
 
+/// Services tab page.
 class ServicesPage extends StatelessWidget {
   const ServicesPage({super.key, required this.backendUrl});
 
@@ -332,6 +348,7 @@ class ServicesPage extends StatelessWidget {
   }
 }
 
+/// Split pane wrapper for service list (left) and service call panel (right).
 class _ServicesSplitPage extends StatefulWidget {
   const _ServicesSplitPage({required this.backendUrl});
 
@@ -341,6 +358,7 @@ class _ServicesSplitPage extends StatefulWidget {
   State<_ServicesSplitPage> createState() => _ServicesSplitPageState();
 }
 
+/// Maintains selected service item.
 class _ServicesSplitPageState extends State<_ServicesSplitPage> {
   Map<String, dynamic>? _selectedService;
 
@@ -369,6 +387,7 @@ class _ServicesSplitPageState extends State<_ServicesSplitPage> {
   }
 }
 
+/// Left-side service list with filtering, refresh, and favorites.
 class _ServicesList extends StatefulWidget {
   const _ServicesList({required this.backendUrl, required this.onSelect});
 
@@ -379,6 +398,7 @@ class _ServicesList extends StatefulWidget {
   State<_ServicesList> createState() => _ServicesListState();
 }
 
+/// State for service discovery list and related UI controls.
 class _ServicesListState extends State<_ServicesList> {
   late Future<List<Map<String, dynamic>>> _future;
   final TextEditingController _searchController = TextEditingController();
@@ -543,6 +563,7 @@ class _ServicesListState extends State<_ServicesList> {
   }
 }
 
+/// Right-side service call panel with schema and JSON payload editor.
 class _ServiceCallPane extends StatefulWidget {
   const _ServiceCallPane({
     required this.backendUrl,
@@ -558,6 +579,7 @@ class _ServiceCallPane extends StatefulWidget {
   State<_ServiceCallPane> createState() => _ServiceCallPaneState();
 }
 
+/// Handles schema loading and service call execution flow.
 class _ServiceCallPaneState extends State<_ServiceCallPane> {
   final TextEditingController _payloadController = TextEditingController();
   bool _loadingSchema = false;
@@ -749,6 +771,7 @@ class _ServiceCallPaneState extends State<_ServiceCallPane> {
   }
 }
 
+/// Generic one-column list page used by simple tabs (e.g., Nodes).
 class _SimpleListPage extends StatefulWidget {
   const _SimpleListPage({
     required this.title,
@@ -764,6 +787,7 @@ class _SimpleListPage extends StatefulWidget {
   State<_SimpleListPage> createState() => _SimpleListPageState();
 }
 
+/// State holder for generic list page.
 class _SimpleListPageState extends State<_SimpleListPage> {
   late Future<List<Map<String, dynamic>>> _future;
 
@@ -813,6 +837,7 @@ class _SimpleListPageState extends State<_SimpleListPage> {
   }
 }
 
+/// Right-side topic panel: live monitor, single publish, and loop controls.
 class TopicMessagesPane extends StatefulWidget {
   const TopicMessagesPane({
     super.key,
@@ -829,9 +854,13 @@ class TopicMessagesPane extends StatefulWidget {
   State<TopicMessagesPane> createState() => _TopicMessagesPaneState();
 }
 
+/// Handles WebSocket stream, publish actions, and anti-self-block traffic logic.
 class _TopicMessagesPaneState extends State<TopicMessagesPane> {
+  // WebSocket channel used for live topic streaming.
   WebSocketChannel? _channel;
+  // Ring-like in-memory list of most recent messages shown in the UI.
   final List<Map<String, dynamic>> _messages = [];
+  // Connection and publish status flags.
   String? _error;
   bool _connecting = false;
   bool _imageViewEnabled = false;
@@ -909,6 +938,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   }
 
   void _connect() {
+    // Recreate stream subscription whenever topic or backend changes.
     _channel?.sink.close();
     _connecting = true;
     final wsBase = RosApi.toWebSocketUrl(widget.backendUrl);
@@ -969,6 +999,8 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   }
 
   void _markTopicTraffic() {
+    // Ignore traffic-detection while our own backend loop is active to prevent
+    // self-blocking behavior in the publisher controls.
     if (_ownLoopActive || _looping) {
       return;
     }
@@ -998,6 +1030,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   }
 
   bool _shouldRenderTopicMessage(Map<String, dynamic> data) {
+    // Throttle high-frequency non-image messages to keep UI responsive.
     if (!data.containsKey('timestamp')) {
       return true;
     }
@@ -1022,6 +1055,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   }
 
   Future<void> _loadTemplate() async {
+    // Load a dynamic ROS message template to generate the publish form fields.
     if (widget.topicType.isEmpty) {
       setState(() => _messageTemplate = <String, dynamic>{});
       return;
@@ -1055,6 +1089,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   }
 
   Future<void> _startLoopPublishing() async {
+    // Start backend-managed loop publishing with current payload+frequency.
     if (_looping || _loopActionInProgress) {
       return;
     }
@@ -1112,6 +1147,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   }
 
   void _armSelfTrafficIgnore() {
+    // Small grace window to avoid treating immediate loop echoes as external traffic.
     var ignoreMs = 1200;
     if (ignoreMs < 300) {
       ignoreMs = 300;
@@ -1137,6 +1173,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
     String? reason,
     bool updateState = true,
   }) async {
+    // Stop loop remotely in backend and synchronize local UI state.
     final wasLooping = _looping;
     _looping = false;
     _ownLoopActive = false;
@@ -1185,6 +1222,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   }
 
   Future<void> _publishMessage() async {
+    // Single-message publish path (manual button).
     if (_topicBusyByExternalTraffic) {
       setState(() {
         _publishError = 'Publishing blocked: topic is already receiving messages.';
@@ -1402,6 +1440,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   }
 
   Widget _buildImagePreview() {
+    // Render latest image frame with zoom/pan support when image mode is enabled.
     final frameMsg = _latestImageMessage();
     if (frameMsg == null) {
       return const Center(child: Text('Waiting for image frame...'));
@@ -1457,6 +1496,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   }
 
   Uint8List? _sensorImageToPng(Map<String, dynamic> wsMsg) {
+    // Decode either compressed base64 frame or raw pixel payload to displayable bytes.
     if (wsMsg['image_b64'] is String) {
       return base64Decode(wsMsg['image_b64'] as String);
     }
@@ -1538,6 +1578,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
 }
 
 class _CreateTopicDialog extends StatefulWidget {
+  /// Dialog used to create a publisher/topic from curated message types.
   const _CreateTopicDialog({required this.backendUrl});
 
   final String backendUrl;
@@ -1546,7 +1587,9 @@ class _CreateTopicDialog extends StatefulWidget {
   State<_CreateTopicDialog> createState() => _CreateTopicDialogState();
 }
 
+/// State for topic creation flow and optional initial publish.
 class _CreateTopicDialogState extends State<_CreateTopicDialog> {
+  // Topic creation form state.
   final TextEditingController _topicController = TextEditingController();
   final GlobalKey<_PayloadFieldsFormState> _payloadFormKey =
       GlobalKey<_PayloadFieldsFormState>();
@@ -1573,6 +1616,7 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
   }
 
   Future<void> _loadMessageTypes() async {
+    // Fetch backend-supported message types and prioritize common ROS packages.
     setState(() => _loadingTypes = true);
     try {
       final result = await RosApi(widget.backendUrl).getTopicMessageTypes();
@@ -1605,6 +1649,7 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
   }
 
   Future<void> _loadTemplate() async {
+    // Fetch selected message type template for dynamic field generation.
     final messageType = _selectedType;
     if (messageType == null || messageType.isEmpty) {
       setState(() => _template = null);
@@ -1628,6 +1673,7 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
   }
 
   Future<void> _createTopic() async {
+    // Create publisher/topic and optionally publish an initial message payload.
     final topicName = _topicController.text.trim();
     final messageType = _selectedType;
     if (topicName.isEmpty) {
@@ -1811,6 +1857,7 @@ enum _PayloadFieldKind {
 }
 
 class _PayloadFieldSpec {
+  /// Metadata describing a single editable payload field.
   _PayloadFieldSpec({
     required this.path,
     required this.kind,
@@ -1824,6 +1871,7 @@ class _PayloadFieldSpec {
   final bool? initialBool;
 }
 
+/// Dynamic payload form generated from a ROS message template map.
 class _PayloadFieldsForm extends StatefulWidget {
   const _PayloadFieldsForm({super.key, required this.template});
 
@@ -1833,7 +1881,9 @@ class _PayloadFieldsForm extends StatefulWidget {
   State<_PayloadFieldsForm> createState() => _PayloadFieldsFormState();
 }
 
+/// Flattens nested template fields into editable widgets and rebuilds payload JSON.
 class _PayloadFieldsFormState extends State<_PayloadFieldsForm> {
+  // Flattened field specs generated from nested message template map.
   late List<_PayloadFieldSpec> _fields;
   final Map<String, TextEditingController> _controllers = {};
   final Map<String, bool> _boolValues = {};
@@ -1869,6 +1919,7 @@ class _PayloadFieldsFormState extends State<_PayloadFieldsForm> {
   }
 
   void _rebuildFields() {
+    // Rebuild controllers/toggles whenever message template changes.
     _hasHeaderStamp = false;
     _fields = _flattenFields(widget.template);
     for (final spec in _fields) {
@@ -1884,6 +1935,7 @@ class _PayloadFieldsFormState extends State<_PayloadFieldsForm> {
   List<_PayloadFieldSpec> _flattenFields(
     Map<String, dynamic> template,
   ) {
+    // Convert nested map template into a flat list of editable field specs.
     final specs = <_PayloadFieldSpec>[];
 
     void walk(dynamic node, List<String> path) {
@@ -1964,6 +2016,7 @@ class _PayloadFieldsFormState extends State<_PayloadFieldsForm> {
   }
 
   Map<String, dynamic> buildPayload() {
+    // Recompose nested payload map from current form field values.
     final payload = _deepCopyMap(widget.template);
     for (final spec in _fields) {
       final key = _pathKey(spec.path);
@@ -2003,6 +2056,7 @@ class _PayloadFieldsFormState extends State<_PayloadFieldsForm> {
     List<String> path,
     dynamic value,
   ) {
+    // Generic setter for nested map paths like `header.frame_id`.
     dynamic current = root;
     for (var i = 0; i < path.length - 1; i++) {
       final segment = path[i];
@@ -2081,6 +2135,7 @@ Map<String, dynamic> _deepCopyMap(Map<String, dynamic> value) {
 }
 
 class ResponsiveSplitPane extends StatefulWidget {
+  /// Reusable resizable split-pane for desktop and stacked layout for mobile.
   const ResponsiveSplitPane({
     super.key,
     required this.left,
@@ -2096,6 +2151,7 @@ class ResponsiveSplitPane extends StatefulWidget {
   State<ResponsiveSplitPane> createState() => _ResponsiveSplitPaneState();
 }
 
+/// Implements drag-resize behavior and responsive fallback layout.
 class _ResponsiveSplitPaneState extends State<ResponsiveSplitPane> {
   static const _dividerWidth = 12.0;
   static const _minPaneWidth = 220.0;
@@ -2172,22 +2228,26 @@ class _ResponsiveSplitPaneState extends State<ResponsiveSplitPane> {
   }
 }
 
+/// Thin HTTP/WebSocket helper used by UI widgets to call backend endpoints.
 class RosApi {
   RosApi(this.baseUrl);
 
   final String baseUrl;
 
   static String defaultBaseUrl() {
+    // Derive backend base URL from current page host, forcing API port 8000.
     final host = Uri.base.host.isEmpty ? 'localhost' : Uri.base.host;
     final scheme = Uri.base.scheme == 'https' ? 'https' : 'http';
     return '$scheme://$host:8000';
   }
 
   Future<List<Map<String, dynamic>>> getTopics() async {
+    // Graph discovery: topics.
     return _getList('/topics');
   }
 
   Future<Map<String, List<String>>> getTopicMessageTypes() async {
+    // Curated types shown in "create topic" dialog.
     final uri = Uri.parse('$baseUrl/topic-message-types');
     final response = await http.get(uri);
     if (response.statusCode != 200) {
@@ -2203,6 +2263,7 @@ class RosApi {
   }
 
   Future<Map<String, dynamic>> getTopicMessageTemplate(String messageType) async {
+    // Template used to generate dynamic publish form fields.
     final uri = Uri.parse('$baseUrl/topic-message-template').replace(
       queryParameters: {'message_type': messageType},
     );
@@ -2218,6 +2279,7 @@ class RosApi {
     required String messageType,
     int qosDepth = 10,
   }) async {
+    // Explicit publisher creation/reuse in backend.
     final uri = Uri.parse('$baseUrl/topic-publisher');
     final response = await http.post(
       uri,
@@ -2240,6 +2302,7 @@ class RosApi {
     required Map<String, dynamic> message,
     int qosDepth = 10,
   }) async {
+    // One-shot topic publish endpoint.
     final uri = Uri.parse('$baseUrl/topic-publish');
     final response = await http.post(
       uri,
@@ -2264,6 +2327,7 @@ class RosApi {
     required double frequencyHz,
     int qosDepth = 10,
   }) async {
+    // Start backend-managed loop publishing.
     final uri = Uri.parse('$baseUrl/topic-publish-loop/start');
     final response = await http.post(
       uri,
@@ -2286,6 +2350,7 @@ class RosApi {
     required String name,
     required String messageType,
   }) async {
+    // Stop backend-managed loop publishing.
     final uri = Uri.parse('$baseUrl/topic-publish-loop/stop');
     final response = await http.post(
       uri,
@@ -2302,10 +2367,12 @@ class RosApi {
   }
 
   Future<List<Map<String, dynamic>>> getNodes() async {
+    // Graph discovery: nodes.
     return _getList('/nodes');
   }
 
   Future<List<Map<String, dynamic>>> getServices() async {
+    // Graph discovery: services.
     return _getList('/services');
   }
 
@@ -2313,6 +2380,7 @@ class RosApi {
     String serviceName,
     String serviceType,
   ) async {
+    // Retrieve request/response templates for selected service type.
     final uri = Uri.parse('$baseUrl/service-schema').replace(
       queryParameters: {'name': serviceName, 'service_type': serviceType},
     );
@@ -2329,6 +2397,7 @@ class RosApi {
     required Map<String, dynamic> request,
     double timeoutSec = 3.0,
   }) async {
+    // Invoke ROS service through backend.
     final uri = Uri.parse('$baseUrl/service-call');
     final response = await http.post(
       uri,
@@ -2347,6 +2416,7 @@ class RosApi {
   }
 
   Future<List<Map<String, dynamic>>> _getList(String path) async {
+    // Shared helper for endpoints returning list payloads.
     final uri = Uri.parse('$baseUrl$path');
     final response = await http.get(uri);
     if (response.statusCode != 200) {
@@ -2357,6 +2427,7 @@ class RosApi {
   }
 
   static String toWebSocketUrl(String httpUrl) {
+    // Convert API base URL into matching WebSocket scheme for live streams.
     if (httpUrl.startsWith('https://')) {
       return httpUrl.replaceFirst('https://', 'wss://');
     }
