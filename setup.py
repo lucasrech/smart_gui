@@ -28,6 +28,7 @@ setup(
     entry_points={
         "console_scripts": [
             "smart_gui_api = smart_gui.ros2_inspector_api:main",
+            "random_int8_topics = smart_gui.random_int8_topics_node:main",
         ],
     },
 )

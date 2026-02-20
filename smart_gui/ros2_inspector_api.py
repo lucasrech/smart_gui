@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import base64
+from copy import deepcopy
 import io
 import threading
 import time
@@ -21,12 +22,61 @@ from rosidl_runtime_py.utilities import get_message, get_service
 import uvicorn
 
 
+SUPPORTED_TOPIC_MESSAGE_TYPES: Dict[str, List[str]] = {
+    "std_msgs": [
+        "std_msgs/msg/Bool",
+        "std_msgs/msg/Byte",
+        "std_msgs/msg/ColorRGBA",
+        "std_msgs/msg/Float32",
+        "std_msgs/msg/Float64",
+        "std_msgs/msg/Int32",
+        "std_msgs/msg/Int64",
+        "std_msgs/msg/String",
+        "std_msgs/msg/UInt32",
+        "std_msgs/msg/UInt64",
+    ],
+    "sensor_msgs": [
+        "sensor_msgs/msg/BatteryState",
+        "sensor_msgs/msg/FluidPressure",
+        "sensor_msgs/msg/Imu",
+        "sensor_msgs/msg/Joy",
+        "sensor_msgs/msg/LaserScan",
+        "sensor_msgs/msg/MagneticField",
+        "sensor_msgs/msg/NavSatFix",
+        "sensor_msgs/msg/Range",
+        "sensor_msgs/msg/Temperature",
+    ],
+    "geometry_msgs": [
+        "geometry_msgs/msg/Pose",
+        "geometry_msgs/msg/PoseStamped",
+        "geometry_msgs/msg/Quaternion",
+        "geometry_msgs/msg/TransformStamped",
+        "geometry_msgs/msg/Twist",
+        "geometry_msgs/msg/TwistStamped",
+        "geometry_msgs/msg/Vector3",
+        "geometry_msgs/msg/Vector3Stamped",
+        "geometry_msgs/msg/Wrench",
+        "geometry_msgs/msg/WrenchStamped",
+    ],
+}
+
+
+class TopicLoopPublisher:
+    def __init__(self, stop_event: threading.Event, thread: threading.Thread) -> None:
+        self.stop_event = stop_event
+        self.thread = thread
+
+
 class Ros2Manager:
     def __init__(self) -> None:
         self._node = None
         self._executor = None
         self._spin_thread = None
         self._lock = threading.Lock()
+        self._publisher_lock = threading.Lock()
+        self._publishers: Dict[tuple[str, str], Any] = {}
+        self._loop_lock = threading.Lock()
+        self._topic_loops: Dict[tuple[str, str], TopicLoopPublisher] = {}
 
     def start(self) -> None:
         with self._lock:
@@ -43,11 +93,23 @@ class Ros2Manager:
         with self._lock:
             if self._node is None:
                 return
+            self.stop_all_topic_publish_loops()
+            with self._publisher_lock:
+                for publisher in self._publishers.values():
+                    self._node.destroy_publisher(publisher)
+                self._publishers.clear()
             self._executor.shutdown()
             self._executor.remove_node(self._node)
             self._node.destroy_node()
             self._node = None
             rclpy.shutdown()
+
+    @staticmethod
+    def normalize_topic_name(topic: str) -> str:
+        topic = topic.strip()
+        if not topic:
+            raise ValueError("topic name cannot be empty")
+        return topic if topic.startswith("/") else f"/{topic}"
 
     def list_topics(self) -> List[Dict[str, Any]]:
         topics = self._node.get_topic_names_and_types()
@@ -68,6 +130,180 @@ class Ros2Manager:
 
     def destroy_subscription(self, sub) -> None:
         self._node.destroy_subscription(sub)
+
+    def get_message_template(self, msg_type: str) -> Dict[str, Any]:
+        msg_cls = get_message(msg_type)
+        template = message_to_ordereddict(msg_cls())
+        return {
+            "message_type": msg_type,
+            "message_template": template,
+        }
+
+    def create_topic_publisher(
+        self,
+        topic_name: str,
+        msg_type: str,
+        qos_depth: int = 10,
+    ) -> Dict[str, Any]:
+        topic_name = self.normalize_topic_name(topic_name)
+        msg_cls = get_message(msg_type)
+        key = (topic_name, msg_type)
+        with self._publisher_lock:
+            if key in self._publishers:
+                created = False
+            else:
+                qos = QoSProfile(depth=max(1, int(qos_depth)))
+                publisher = self._node.create_publisher(msg_cls, topic_name, qos)
+                self._publishers[key] = publisher
+                created = True
+        return {
+            "name": topic_name,
+            "message_type": msg_type,
+            "created": created,
+        }
+
+    def publish_topic_message(
+        self,
+        topic_name: str,
+        msg_type: str,
+        message_data: Dict[str, Any],
+        qos_depth: int = 10,
+    ) -> Dict[str, Any]:
+        topic_name = self.normalize_topic_name(topic_name)
+        msg_cls = get_message(msg_type)
+        key = (topic_name, msg_type)
+
+        with self._publisher_lock:
+            publisher = self._publishers.get(key)
+            if publisher is None:
+                qos = QoSProfile(depth=max(1, int(qos_depth)))
+                publisher = self._node.create_publisher(msg_cls, topic_name, qos)
+                self._publishers[key] = publisher
+
+        msg = msg_cls()
+        set_message_fields(msg, message_data)
+
+        # If message contains a std_msgs/Header, always fill timestamp from ROS clock.
+        if hasattr(msg, "header") and hasattr(msg.header, "stamp"):
+            now = self._node.get_clock().now().to_msg()
+            msg.header.stamp.sec = now.sec
+            msg.header.stamp.nanosec = now.nanosec
+
+        publisher.publish(msg)
+        return {
+            "name": topic_name,
+            "message_type": msg_type,
+            "published": message_to_ordereddict(msg),
+        }
+
+    def start_topic_publish_loop(
+        self,
+        topic_name: str,
+        msg_type: str,
+        message_data: Dict[str, Any],
+        frequency_hz: float,
+        qos_depth: int = 10,
+    ) -> Dict[str, Any]:
+        if frequency_hz <= 0:
+            raise ValueError("frequency_hz must be > 0")
+
+        topic_name = self.normalize_topic_name(topic_name)
+        key = (topic_name, msg_type)
+        interval_sec = 1.0 / float(frequency_hz)
+        publish_payload = deepcopy(message_data)
+
+        # Validate topic type and ensure publisher exists before background loop starts.
+        self.create_topic_publisher(topic_name, msg_type, qos_depth=qos_depth)
+
+        previous_loop = None
+        with self._loop_lock:
+            previous_loop = self._topic_loops.get(key)
+            if previous_loop is not None:
+                previous_loop.stop_event.set()
+
+        if previous_loop is not None:
+            previous_loop.thread.join(timeout=1.0)
+
+        stop_event = threading.Event()
+
+        def _worker() -> None:
+            next_publish = time.monotonic()
+            while not stop_event.is_set():
+                try:
+                    self.publish_topic_message(
+                        topic_name=topic_name,
+                        msg_type=msg_type,
+                        message_data=publish_payload,
+                        qos_depth=qos_depth,
+                    )
+                except Exception as err:
+                    if self._node is not None:
+                        self._node.get_logger().error(
+                            f"topic_loop_publish_failed topic={topic_name} type={msg_type}: {err}"
+                        )
+                    break
+
+                next_publish += interval_sec
+                wait_sec = max(0.0, next_publish - time.monotonic())
+                if stop_event.wait(wait_sec):
+                    break
+
+            with self._loop_lock:
+                current = self._topic_loops.get(key)
+                if current is not None and current.stop_event is stop_event:
+                    self._topic_loops.pop(key, None)
+
+        worker = threading.Thread(
+            target=_worker,
+            daemon=True,
+            name=f"topic_loop_pub:{topic_name}:{msg_type}",
+        )
+
+        with self._loop_lock:
+            self._topic_loops[key] = TopicLoopPublisher(stop_event=stop_event, thread=worker)
+
+        worker.start()
+        return {
+            "name": topic_name,
+            "message_type": msg_type,
+            "running": True,
+            "frequency_hz": float(frequency_hz),
+            "replaced_previous_loop": previous_loop is not None,
+        }
+
+    def stop_topic_publish_loop(self, topic_name: str, msg_type: str) -> Dict[str, Any]:
+        topic_name = self.normalize_topic_name(topic_name)
+        key = (topic_name, msg_type)
+
+        with self._loop_lock:
+            loop_state = self._topic_loops.pop(key, None)
+
+        if loop_state is None:
+            return {
+                "name": topic_name,
+                "message_type": msg_type,
+                "running": False,
+                "stopped": False,
+            }
+
+        loop_state.stop_event.set()
+        loop_state.thread.join(timeout=1.0)
+        return {
+            "name": topic_name,
+            "message_type": msg_type,
+            "running": False,
+            "stopped": True,
+        }
+
+    def stop_all_topic_publish_loops(self) -> None:
+        with self._loop_lock:
+            loops = list(self._topic_loops.values())
+            self._topic_loops.clear()
+
+        for loop_state in loops:
+            loop_state.stop_event.set()
+        for loop_state in loops:
+            loop_state.thread.join(timeout=1.0)
 
     def get_service_schema(self, service_name: str, service_type: str) -> Dict[str, Any]:
         srv_cls = get_service(service_type)
@@ -131,6 +367,32 @@ class ServiceCallRequest(BaseModel):
     service_type: str
     request: Dict[str, Any]
     timeout_sec: float = 3.0
+
+
+class TopicPublisherRequest(BaseModel):
+    name: str
+    message_type: str
+    qos_depth: int = 10
+
+
+class TopicPublishRequest(BaseModel):
+    name: str
+    message_type: str
+    message: Dict[str, Any]
+    qos_depth: int = 10
+
+
+class TopicPublishLoopStartRequest(BaseModel):
+    name: str
+    message_type: str
+    message: Dict[str, Any]
+    frequency_hz: float = 1.0
+    qos_depth: int = 10
+
+
+class TopicPublishLoopStopRequest(BaseModel):
+    name: str
+    message_type: str
 
 
 def _compress_ros_image_to_jpeg(
@@ -232,6 +494,70 @@ def favicon() -> Response:
 @app.get("/topics")
 def topics() -> List[Dict[str, Any]]:
     return ros2.list_topics()
+
+
+@app.get("/topic-message-types")
+def topic_message_types() -> Dict[str, List[str]]:
+    return SUPPORTED_TOPIC_MESSAGE_TYPES
+
+
+@app.get("/topic-message-template")
+def topic_message_template(message_type: str) -> Dict[str, Any]:
+    try:
+        return ros2.get_message_template(message_type)
+    except Exception as err:
+        raise HTTPException(status_code=400, detail=f"invalid_message_type: {err}") from err
+
+
+@app.post("/topic-publisher")
+def topic_publisher(payload: TopicPublisherRequest) -> Dict[str, Any]:
+    try:
+        return ros2.create_topic_publisher(
+            topic_name=payload.name,
+            msg_type=payload.message_type,
+            qos_depth=payload.qos_depth,
+        )
+    except Exception as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+
+@app.post("/topic-publish")
+def topic_publish(payload: TopicPublishRequest) -> Dict[str, Any]:
+    try:
+        result = ros2.publish_topic_message(
+            topic_name=payload.name,
+            msg_type=payload.message_type,
+            message_data=payload.message,
+            qos_depth=payload.qos_depth,
+        )
+        return {"ok": True, **result}
+    except Exception as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+
+@app.post("/topic-publish-loop/start")
+def topic_publish_loop_start(payload: TopicPublishLoopStartRequest) -> Dict[str, Any]:
+    try:
+        return ros2.start_topic_publish_loop(
+            topic_name=payload.name,
+            msg_type=payload.message_type,
+            message_data=payload.message,
+            frequency_hz=payload.frequency_hz,
+            qos_depth=payload.qos_depth,
+        )
+    except Exception as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+
+@app.post("/topic-publish-loop/stop")
+def topic_publish_loop_stop(payload: TopicPublishLoopStopRequest) -> Dict[str, Any]:
+    try:
+        return ros2.stop_topic_publish_loop(
+            topic_name=payload.name,
+            msg_type=payload.message_type,
+        )
+    except Exception as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
 
 
 @app.get("/nodes")

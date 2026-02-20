@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -16,7 +17,7 @@ class RosInspectorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'ROS2 Inspector',
+      title: 'Smart GUI',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1F6FEB)),
@@ -55,7 +56,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ROS2 Inspector'),
+        title: const Text('ROS2 Smart GUI'),
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
@@ -87,7 +88,7 @@ class TopicsPage extends StatefulWidget {
 }
 
 class _TopicsPageState extends State<TopicsPage> {
-  String? _selectedTopic;
+  Map<String, dynamic>? _selectedTopic;
 
   @override
   Widget build(BuildContext context) {
@@ -100,7 +101,13 @@ class _TopicsPageState extends State<TopicsPage> {
           ? const Center(child: Text('Selecione um tópico para ver mensagens.'))
           : TopicMessagesPane(
               backendUrl: widget.backendUrl,
-              topicName: _selectedTopic!,
+              topicName: _selectedTopic!['name'] as String,
+              topicType:
+                  ((_selectedTopic!['types'] as List<dynamic>?)?.isNotEmpty ??
+                      false)
+                  ? (_selectedTopic!['types'] as List<dynamic>).first
+                        .toString()
+                  : '',
             ),
     );
   }
@@ -110,7 +117,7 @@ class _TopicsList extends StatefulWidget {
   const _TopicsList({required this.backendUrl, required this.onSelect});
 
   final String backendUrl;
-  final ValueChanged<String> onSelect;
+  final ValueChanged<Map<String, dynamic>> onSelect;
 
   @override
   State<_TopicsList> createState() => _TopicsListState();
@@ -142,6 +149,20 @@ class _TopicsListState extends State<_TopicsList> {
         _future = RosApi(widget.backendUrl).getTopics();
       });
     }
+  }
+
+  Future<void> _showCreateTopicDialog() async {
+    final created = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => _CreateTopicDialog(backendUrl: widget.backendUrl),
+    );
+    if (!mounted || created == null) {
+      return;
+    }
+    setState(() {
+      _future = RosApi(widget.backendUrl).getTopics();
+    });
+    widget.onSelect(created);
   }
 
   @override
@@ -189,6 +210,11 @@ class _TopicsListState extends State<_TopicsList> {
                   });
                 },
                 icon: const Icon(Icons.refresh),
+              ),
+              IconButton(
+                tooltip: 'Criar tópico',
+                onPressed: _showCreateTopicDialog,
+                icon: const Icon(Icons.add_circle_outline),
               ),
             ],
           ),
@@ -246,7 +272,7 @@ class _TopicsListState extends State<_TopicsList> {
                   return ListTile(
                     title: Text(name),
                     subtitle: Text(types),
-                    onTap: () => widget.onSelect(name),
+                    onTap: () => widget.onSelect(topic),
                     trailing: IconButton(
                       tooltip: _favoriteTopics.contains(name)
                           ? 'Desfavoritar'
@@ -794,10 +820,12 @@ class TopicMessagesPane extends StatefulWidget {
     super.key,
     required this.backendUrl,
     required this.topicName,
+    required this.topicType,
   });
 
   final String backendUrl;
   final String topicName;
+  final String topicType;
 
   @override
   State<TopicMessagesPane> createState() => _TopicMessagesPaneState();
@@ -809,11 +837,29 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   String? _error;
   bool _connecting = false;
   bool _imageViewEnabled = false;
+  final GlobalKey<_PayloadFieldsFormState> _publishFormKey =
+      GlobalKey<_PayloadFieldsFormState>();
+  Map<String, dynamic>? _messageTemplate;
+  bool _loadingTemplate = false;
+  bool _publishing = false;
+  String? _publishError;
+  String? _publishInfo;
+  final TextEditingController _loopFrequencyController = TextEditingController(
+    text: '1.0',
+  );
+  bool _looping = false;
+  bool _loopActionInProgress = false;
+  Timer? _topicTrafficTimer;
+  bool _topicBusyByExternalTraffic = false;
+  DateTime? _selfTrafficIgnoreUntil;
+  bool _ownLoopActive = false;
+  DateTime? _lastRenderedTopicMessageAt;
 
   @override
   void initState() {
     super.initState();
     _connect();
+    _loadTemplate();
   }
 
   @override
@@ -821,15 +867,45 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.topicName != widget.topicName ||
         oldWidget.backendUrl != widget.backendUrl) {
+      if (_looping) {
+        unawaited(
+          _stopLoopPublishingForTopic(
+            topicName: oldWidget.topicName,
+            topicType: oldWidget.topicType,
+            updateState: false,
+          ),
+        );
+      }
+      _clearTopicTrafficState();
+      _ownLoopActive = false;
+      _lastRenderedTopicMessageAt = null;
       _messages.clear();
       _error = null;
       _imageViewEnabled = false;
       _connect();
     }
+    if (oldWidget.topicName != widget.topicName ||
+        oldWidget.topicType != widget.topicType ||
+        oldWidget.backendUrl != widget.backendUrl) {
+      _publishError = null;
+      _publishInfo = null;
+      _loadTemplate();
+    }
   }
 
   @override
   void dispose() {
+    if (_looping) {
+      unawaited(
+        _stopLoopPublishingForTopic(
+          topicName: widget.topicName,
+          topicType: widget.topicType,
+          updateState: false,
+        ),
+      );
+    }
+    _topicTrafficTimer?.cancel();
+    _loopFrequencyController.dispose();
     _channel?.sink.close();
     super.dispose();
   }
@@ -854,6 +930,18 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
           if (data.containsKey('error')) {
             setState(() => _error = data['error'] as String?);
             return;
+          }
+          final isTopicData = data.containsKey('timestamp');
+          if (isTopicData) {
+            _markTopicTraffic();
+          }
+          if (!_shouldRenderTopicMessage(data)) {
+            return;
+          }
+          if (data['message'] != null && data['message'] is Map<String, dynamic>) {
+            data['_render_message'] = const JsonEncoder.withIndent(
+              '  ',
+            ).convert(data['message']);
           }
           setState(() {
             _error = null;
@@ -882,8 +970,269 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
     );
   }
 
+  void _markTopicTraffic() {
+    if (_ownLoopActive || _looping) {
+      return;
+    }
+    final now = DateTime.now();
+    final ignoreUntil = _selfTrafficIgnoreUntil;
+    if (ignoreUntil != null && now.isBefore(ignoreUntil)) {
+      return;
+    }
+
+    if (!_topicBusyByExternalTraffic && mounted) {
+      setState(() {
+        _topicBusyByExternalTraffic = true;
+      });
+    } else {
+      _topicBusyByExternalTraffic = true;
+    }
+
+    _topicTrafficTimer?.cancel();
+    _topicTrafficTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _topicBusyByExternalTraffic = false;
+      });
+    });
+  }
+
+  bool _shouldRenderTopicMessage(Map<String, dynamic> data) {
+    if (!data.containsKey('timestamp')) {
+      return true;
+    }
+    final type = data['type']?.toString() ?? '';
+    if (type == 'sensor_msgs/msg/Image') {
+      return true;
+    }
+    final now = DateTime.now();
+    final last = _lastRenderedTopicMessageAt;
+    if (last != null && now.difference(last).inMilliseconds < 80) {
+      return false;
+    }
+    _lastRenderedTopicMessageAt = now;
+    return true;
+  }
+
+  void _clearTopicTrafficState() {
+    _topicTrafficTimer?.cancel();
+    _topicTrafficTimer = null;
+    _topicBusyByExternalTraffic = false;
+    _selfTrafficIgnoreUntil = null;
+  }
+
+  Future<void> _loadTemplate() async {
+    if (widget.topicType.isEmpty) {
+      setState(() => _messageTemplate = <String, dynamic>{});
+      return;
+    }
+    setState(() => _loadingTemplate = true);
+    try {
+      final schema = await RosApi(
+        widget.backendUrl,
+      ).getTopicMessageTemplate(widget.topicType);
+      final template = schema['message_template'];
+      if (template is! Map<String, dynamic>) {
+        throw Exception('Template de mensagem inválido.');
+      }
+      setState(() {
+        _messageTemplate = _deepCopyMap(template);
+      });
+    } catch (err) {
+      setState(() => _publishError = err.toString());
+    } finally {
+      setState(() => _loadingTemplate = false);
+    }
+  }
+
+  double? _parseLoopFrequencyHz() {
+    final text = _loopFrequencyController.text.trim().replaceAll(',', '.');
+    final hz = double.tryParse(text);
+    if (hz == null || hz <= 0) {
+      return null;
+    }
+    return hz;
+  }
+
+  Future<void> _startLoopPublishing() async {
+    if (_looping || _loopActionInProgress) {
+      return;
+    }
+    if (_topicBusyByExternalTraffic) {
+      setState(() {
+        _publishError =
+            'Publicação bloqueada: o tópico já está recebendo mensagens.';
+      });
+      return;
+    }
+    final hz = _parseLoopFrequencyHz();
+    if (hz == null) {
+      setState(() {
+        _publishError = 'Frequência inválida. Informe um valor > 0.';
+      });
+      return;
+    }
+    final payload = _publishFormKey.currentState?.buildPayload();
+    if (payload == null) {
+      setState(() {
+        _publishError = 'Payload indisponível para envio.';
+      });
+      return;
+    }
+
+    setState(() {
+      _loopActionInProgress = true;
+      _publishError = null;
+      _publishInfo = null;
+    });
+    try {
+      await RosApi(widget.backendUrl).startTopicPublishLoop(
+        name: widget.topicName,
+        messageType: widget.topicType,
+        message: payload,
+        frequencyHz: hz,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _looping = true;
+        _ownLoopActive = true;
+        _topicBusyByExternalTraffic = false;
+        _publishInfo = 'Loop ativo em ${hz.toStringAsFixed(hz < 10 ? 2 : 1)} Hz.';
+      });
+    } catch (err) {
+      if (mounted) {
+        setState(() => _publishError = err.toString());
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _loopActionInProgress = false);
+      }
+    }
+  }
+
+  void _armSelfTrafficIgnore() {
+    var ignoreMs = 1200;
+    if (ignoreMs < 300) {
+      ignoreMs = 300;
+    }
+    if (ignoreMs > 2500) {
+      ignoreMs = 2500;
+    }
+    _selfTrafficIgnoreUntil = DateTime.now().add(Duration(milliseconds: ignoreMs));
+  }
+
+  Future<void> _stopLoopPublishing({String? reason, bool updateState = true}) async {
+    await _stopLoopPublishingForTopic(
+      topicName: widget.topicName,
+      topicType: widget.topicType,
+      reason: reason,
+      updateState: updateState,
+    );
+  }
+
+  Future<void> _stopLoopPublishingForTopic({
+    required String topicName,
+    required String topicType,
+    String? reason,
+    bool updateState = true,
+  }) async {
+    final wasLooping = _looping;
+    _looping = false;
+    _ownLoopActive = false;
+    _armSelfTrafficIgnore();
+    if (!updateState || !mounted) {
+      if (!wasLooping || topicType.isEmpty) {
+        return;
+      }
+      try {
+        await RosApi(widget.backendUrl).stopTopicPublishLoop(
+          name: topicName,
+          messageType: topicType,
+        );
+      } catch (_) {}
+      return;
+    }
+
+    setState(() {
+      _loopActionInProgress = true;
+      if (reason != null) {
+        _publishInfo = reason;
+      }
+    });
+
+    if (!wasLooping || topicType.isEmpty) {
+      if (mounted) {
+        setState(() => _loopActionInProgress = false);
+      }
+      return;
+    }
+
+    try {
+      await RosApi(widget.backendUrl).stopTopicPublishLoop(
+        name: topicName,
+        messageType: topicType,
+      );
+    } catch (err) {
+      if (mounted) {
+        setState(() => _publishError = err.toString());
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _loopActionInProgress = false);
+      }
+    }
+  }
+
+  Future<void> _publishMessage() async {
+    if (_topicBusyByExternalTraffic) {
+      setState(() {
+        _publishError =
+            'Publicação bloqueada: o tópico já está recebendo mensagens.';
+      });
+      return;
+    }
+    if (_publishing || _loopActionInProgress) {
+      return;
+    }
+    setState(() {
+      _publishing = true;
+      _publishError = null;
+      _publishInfo = null;
+    });
+    try {
+      final payload = _publishFormKey.currentState?.buildPayload();
+      if (payload == null) {
+        throw Exception('Payload indisponível para envio.');
+      }
+      _armSelfTrafficIgnore();
+      await RosApi(widget.backendUrl).publishTopicMessage(
+        name: widget.topicName,
+        messageType: widget.topicType,
+        message: payload,
+      );
+      if (mounted) {
+        setState(() {
+          _publishInfo = 'Mensagem publicada com sucesso.';
+        });
+      }
+    } catch (err) {
+      if (mounted) {
+        setState(() => _publishError = err.toString());
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _publishing = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final publishBlocked = _topicBusyByExternalTraffic && !_looping;
     if (_error != null) {
       return Center(
         child: Column(
@@ -904,7 +1253,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
           subtitle: Text(
             _connecting
                 ? 'Conectando...'
-                : 'Mostrando ${_messages.length} mensagens recentes',
+                : '${widget.topicType} • ${_messages.length} mensagens recentes',
           ),
           trailing: _isImageTopic()
               ? OutlinedButton.icon(
@@ -923,6 +1272,103 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
               : null,
         ),
         const Divider(height: 1),
+        ExpansionTile(
+          title: const Text('Publicar mensagem'),
+          subtitle: Text(
+            widget.topicType.isEmpty ? 'Tipo indisponível' : widget.topicType,
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          children: [
+            if (_loadingTemplate) const LinearProgressIndicator(minHeight: 2),
+            if (_messageTemplate != null) ...[
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.42,
+                ),
+                child: Scrollbar(
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
+                    child: _PayloadFieldsForm(
+                      key: _publishFormKey,
+                      template: _messageTemplate!,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _loopFrequencyController,
+                enabled: !_looping && !_loopActionInProgress,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Frequência de publicação (Hz)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FilledButton.icon(
+                    onPressed:
+                        (_publishing ||
+                            _loopActionInProgress ||
+                            widget.topicType.isEmpty ||
+                            publishBlocked)
+                        ? null
+                        : _publishMessage,
+                    icon: const Icon(Icons.send),
+                    label: Text(_publishing ? 'Publicando...' : 'Publicar'),
+                  ),
+                  FilledButton.tonalIcon(
+                    onPressed:
+                        (widget.topicType.isEmpty || _loopActionInProgress)
+                        ? null
+                        : (_looping
+                              ? () => _stopLoopPublishing()
+                              : (publishBlocked
+                                    ? null
+                                    : _startLoopPublishing)),
+                    icon: Icon(_looping ? Icons.stop : Icons.repeat),
+                    label: Text(
+                      _loopActionInProgress
+                          ? 'Processando...'
+                          : (_looping ? 'Parar loop' : 'Iniciar loop'),
+                    ),
+                  ),
+                ],
+              ),
+              if (publishBlocked) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Publicação bloqueada: tópico com tráfego ativo.',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+            ] else if (!_loadingTemplate) ...[
+              const Text('Não foi possível carregar os campos da mensagem.'),
+            ],
+            if (_publishInfo != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _publishInfo!,
+                style: TextStyle(color: Theme.of(context).colorScheme.primary),
+              ),
+            ],
+            if (_publishError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Erro: $_publishError',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+          ],
+        ),
+        const Divider(height: 1),
         Expanded(
           child: _imageViewEnabled && _isImageTopic()
               ? _buildImagePreview()
@@ -938,9 +1384,10 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
                       dense: true,
                       title: Text(msg['type']?.toString() ?? ''),
                       subtitle: Text(
-                        const JsonEncoder.withIndent(
-                          '  ',
-                        ).convert(msg['message']),
+                        msg['_render_message']?.toString() ??
+                            const JsonEncoder.withIndent('  ').convert(
+                              msg['message'],
+                            ),
                       ),
                       trailing: Text(
                         '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}:${ts.second.toString().padLeft(2, '0')}',
@@ -1098,6 +1545,549 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   }
 }
 
+class _CreateTopicDialog extends StatefulWidget {
+  const _CreateTopicDialog({required this.backendUrl});
+
+  final String backendUrl;
+
+  @override
+  State<_CreateTopicDialog> createState() => _CreateTopicDialogState();
+}
+
+class _CreateTopicDialogState extends State<_CreateTopicDialog> {
+  final TextEditingController _topicController = TextEditingController();
+  final GlobalKey<_PayloadFieldsFormState> _payloadFormKey =
+      GlobalKey<_PayloadFieldsFormState>();
+  bool _loadingTypes = true;
+  bool _loadingTemplate = false;
+  bool _saving = false;
+  bool _publishInitial = false;
+  String? _error;
+  Map<String, List<String>> _messageTypes = {};
+  String? _selectedPackage;
+  String? _selectedType;
+  Map<String, dynamic>? _template;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMessageTypes();
+  }
+
+  @override
+  void dispose() {
+    _topicController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadMessageTypes() async {
+    setState(() => _loadingTypes = true);
+    try {
+      final result = await RosApi(widget.backendUrl).getTopicMessageTypes();
+      final ordered = <String, List<String>>{};
+      for (final pkg in ['std_msgs', 'sensor_msgs', 'geometry_msgs']) {
+        if (result.containsKey(pkg) && result[pkg]!.isNotEmpty) {
+          ordered[pkg] = result[pkg]!;
+        }
+      }
+      for (final entry in result.entries) {
+        ordered.putIfAbsent(entry.key, () => entry.value);
+      }
+      final firstPackage = ordered.keys.isNotEmpty ? ordered.keys.first : null;
+      final firstType = firstPackage == null
+          ? null
+          : ((ordered[firstPackage] ?? const <String>[]).isNotEmpty
+                ? ordered[firstPackage]!.first
+                : null);
+      setState(() {
+        _messageTypes = ordered;
+        _selectedPackage = firstPackage;
+        _selectedType = firstType;
+      });
+      await _loadTemplate();
+    } catch (err) {
+      setState(() => _error = err.toString());
+    } finally {
+      setState(() => _loadingTypes = false);
+    }
+  }
+
+  Future<void> _loadTemplate() async {
+    final messageType = _selectedType;
+    if (messageType == null || messageType.isEmpty) {
+      setState(() => _template = null);
+      return;
+    }
+    setState(() => _loadingTemplate = true);
+    try {
+      final schema = await RosApi(
+        widget.backendUrl,
+      ).getTopicMessageTemplate(messageType);
+      final template = schema['message_template'];
+      if (template is! Map<String, dynamic>) {
+        throw Exception('Template de mensagem inválido.');
+      }
+      setState(() => _template = _deepCopyMap(template));
+    } catch (err) {
+      setState(() => _error = err.toString());
+    } finally {
+      setState(() => _loadingTemplate = false);
+    }
+  }
+
+  Future<void> _createTopic() async {
+    final topicName = _topicController.text.trim();
+    final messageType = _selectedType;
+    if (topicName.isEmpty) {
+      setState(() => _error = 'Informe o nome do tópico.');
+      return;
+    }
+    if (messageType == null || messageType.isEmpty) {
+      setState(() => _error = 'Selecione um tipo de mensagem.');
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final api = RosApi(widget.backendUrl);
+      final created = await api.createTopicPublisher(
+        name: topicName,
+        messageType: messageType,
+      );
+      if (_publishInitial) {
+        final payload = _payloadFormKey.currentState?.buildPayload();
+        if (payload == null) {
+          throw Exception('Payload inicial indisponível.');
+        }
+        await api.publishTopicMessage(
+          name: topicName,
+          messageType: messageType,
+          message: payload,
+        );
+      }
+      if (!mounted) {
+        return;
+      }
+      final normalizedName =
+          created['name']?.toString() ??
+          (topicName.startsWith('/') ? topicName : '/$topicName');
+      Navigator.of(context).pop({
+        'name': normalizedName,
+        'types': [messageType],
+      });
+    } catch (err) {
+      setState(() => _error = err.toString());
+    } finally {
+      setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentTypes = _selectedPackage == null
+        ? const <String>[]
+        : (_messageTypes[_selectedPackage] ?? const <String>[]);
+
+    return AlertDialog(
+      title: const Text('Criar tópico'),
+      content: SizedBox(
+        width: 620,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _topicController,
+                decoration: const InputDecoration(
+                  labelText: 'Nome do tópico',
+                  hintText: '/meu_topico',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (_loadingTypes) const LinearProgressIndicator(minHeight: 2),
+              DropdownButtonFormField<String>(
+                value: _selectedPackage,
+                decoration: const InputDecoration(
+                  labelText: 'Pacote',
+                  border: OutlineInputBorder(),
+                ),
+                items: _messageTypes.keys
+                    .map(
+                      (pkg) => DropdownMenuItem(
+                        value: pkg,
+                        child: Text(pkg),
+                      ),
+                    )
+                    .toList(),
+                onChanged: _saving
+                    ? null
+                    : (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        final types = _messageTypes[value] ?? const <String>[];
+                        final firstType = types.isNotEmpty ? types.first : null;
+                        setState(() {
+                          _selectedPackage = value;
+                          _selectedType = firstType;
+                          _template = null;
+                          _error = null;
+                        });
+                        _loadTemplate();
+                      },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: currentTypes.contains(_selectedType)
+                    ? _selectedType
+                    : null,
+                decoration: const InputDecoration(
+                  labelText: 'Tipo de mensagem',
+                  border: OutlineInputBorder(),
+                ),
+                items: currentTypes
+                    .map(
+                      (type) => DropdownMenuItem(
+                        value: type,
+                        child: Text(type),
+                      ),
+                    )
+                    .toList(),
+                onChanged: _saving
+                    ? null
+                    : (value) {
+                        setState(() {
+                          _selectedType = value;
+                          _template = null;
+                          _error = null;
+                        });
+                        _loadTemplate();
+                      },
+              ),
+              const SizedBox(height: 12),
+              CheckboxListTile(
+                value: _publishInitial,
+                onChanged: _saving
+                    ? null
+                    : (value) {
+                        setState(() => _publishInitial = value ?? false);
+                      },
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Publicar mensagem inicial após criar'),
+              ),
+              if (_loadingTemplate) const LinearProgressIndicator(minHeight: 2),
+              if (_template != null) ...[
+                const SizedBox(height: 8),
+                _PayloadFieldsForm(key: _payloadFormKey, template: _template!),
+              ],
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  'Erro: $_error',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _createTopic,
+          child: Text(_saving ? 'Criando...' : 'Criar'),
+        ),
+      ],
+    );
+  }
+}
+
+enum _PayloadFieldKind {
+  stringValue,
+  intValue,
+  doubleValue,
+  boolValue,
+  jsonListValue,
+}
+
+class _PayloadFieldSpec {
+  _PayloadFieldSpec({
+    required this.path,
+    required this.kind,
+    this.initialText,
+    this.initialBool,
+  });
+
+  final List<String> path;
+  final _PayloadFieldKind kind;
+  final String? initialText;
+  final bool? initialBool;
+}
+
+class _PayloadFieldsForm extends StatefulWidget {
+  const _PayloadFieldsForm({super.key, required this.template});
+
+  final Map<String, dynamic> template;
+
+  @override
+  State<_PayloadFieldsForm> createState() => _PayloadFieldsFormState();
+}
+
+class _PayloadFieldsFormState extends State<_PayloadFieldsForm> {
+  late List<_PayloadFieldSpec> _fields;
+  final Map<String, TextEditingController> _controllers = {};
+  final Map<String, bool> _boolValues = {};
+  bool _hasHeaderStamp = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _rebuildFields();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PayloadFieldsForm oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.template != widget.template) {
+      _disposeControllers();
+      _rebuildFields();
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposeControllers();
+    super.dispose();
+  }
+
+  void _disposeControllers() {
+    for (final controller in _controllers.values) {
+      controller.dispose();
+    }
+    _controllers.clear();
+    _boolValues.clear();
+  }
+
+  void _rebuildFields() {
+    _hasHeaderStamp = false;
+    _fields = _flattenFields(widget.template);
+    for (final spec in _fields) {
+      final key = _pathKey(spec.path);
+      if (spec.kind == _PayloadFieldKind.boolValue) {
+        _boolValues[key] = spec.initialBool ?? false;
+      } else {
+        _controllers[key] = TextEditingController(text: spec.initialText ?? '');
+      }
+    }
+  }
+
+  List<_PayloadFieldSpec> _flattenFields(
+    Map<String, dynamic> template,
+  ) {
+    final specs = <_PayloadFieldSpec>[];
+
+    void walk(dynamic node, List<String> path) {
+      if (_isHeaderStampPath(path)) {
+        _hasHeaderStamp = true;
+        return;
+      }
+      if (node is Map<String, dynamic>) {
+        for (final entry in node.entries) {
+          walk(entry.value, [...path, entry.key]);
+        }
+        return;
+      }
+      if (node is List<dynamic>) {
+        specs.add(
+          _PayloadFieldSpec(
+            path: path,
+            kind: _PayloadFieldKind.jsonListValue,
+            initialText: const JsonEncoder.withIndent('  ').convert(node),
+          ),
+        );
+        return;
+      }
+      if (node is bool) {
+        specs.add(
+          _PayloadFieldSpec(
+            path: path,
+            kind: _PayloadFieldKind.boolValue,
+            initialBool: node,
+          ),
+        );
+        return;
+      }
+      if (node is int) {
+        specs.add(
+          _PayloadFieldSpec(
+            path: path,
+            kind: _PayloadFieldKind.intValue,
+            initialText: node.toString(),
+          ),
+        );
+        return;
+      }
+      if (node is double) {
+        specs.add(
+          _PayloadFieldSpec(
+            path: path,
+            kind: _PayloadFieldKind.doubleValue,
+            initialText: node.toString(),
+          ),
+        );
+        return;
+      }
+      specs.add(
+        _PayloadFieldSpec(
+          path: path,
+          kind: _PayloadFieldKind.stringValue,
+          initialText: node?.toString() ?? '',
+        ),
+      );
+    }
+
+    for (final entry in template.entries) {
+      walk(entry.value, [entry.key]);
+    }
+    return specs;
+  }
+
+  bool _isHeaderStampPath(List<String> path) {
+    if (path.length < 3) {
+      return false;
+    }
+    final n = path.length;
+    final tail = path[n - 1];
+    return path[n - 3] == 'header' &&
+        path[n - 2] == 'stamp' &&
+        (tail == 'sec' || tail == 'nanosec');
+  }
+
+  Map<String, dynamic> buildPayload() {
+    final payload = _deepCopyMap(widget.template);
+    for (final spec in _fields) {
+      final key = _pathKey(spec.path);
+      dynamic parsedValue;
+      try {
+        switch (spec.kind) {
+          case _PayloadFieldKind.stringValue:
+            parsedValue = _controllers[key]!.text;
+            break;
+          case _PayloadFieldKind.intValue:
+            parsedValue = int.parse(_controllers[key]!.text.trim());
+            break;
+          case _PayloadFieldKind.doubleValue:
+            parsedValue = double.parse(_controllers[key]!.text.trim());
+            break;
+          case _PayloadFieldKind.boolValue:
+            parsedValue = _boolValues[key] ?? false;
+            break;
+          case _PayloadFieldKind.jsonListValue:
+            final decoded = jsonDecode(_controllers[key]!.text);
+            if (decoded is! List<dynamic>) {
+              throw const FormatException('deve ser uma lista JSON');
+            }
+            parsedValue = decoded;
+            break;
+        }
+      } catch (err) {
+        throw Exception('Campo ${spec.path.join('.')} inválido: $err');
+      }
+      _setValueAtPath(payload, spec.path, parsedValue);
+    }
+    return payload;
+  }
+
+  void _setValueAtPath(
+    Map<String, dynamic> root,
+    List<String> path,
+    dynamic value,
+  ) {
+    dynamic current = root;
+    for (var i = 0; i < path.length - 1; i++) {
+      final segment = path[i];
+      if (current is Map<String, dynamic>) {
+        current = current[segment];
+      } else {
+        throw Exception('Estrutura inválida no caminho ${path.join('.')}');
+      }
+    }
+    if (current is! Map<String, dynamic>) {
+      throw Exception('Estrutura inválida no caminho ${path.join('.')}');
+    }
+    current[path.last] = value;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 4),
+        if (_hasHeaderStamp)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              'O timestamp do header será preenchido automaticamente.',
+              style: TextStyle(color: Theme.of(context).colorScheme.primary),
+            ),
+          ),
+        for (final spec in _fields) ...[
+          if (spec.kind == _PayloadFieldKind.boolValue)
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(spec.path.join('.')),
+              value: _boolValues[_pathKey(spec.path)] ?? false,
+              onChanged: (value) {
+                setState(() {
+                  _boolValues[_pathKey(spec.path)] = value;
+                });
+              },
+            )
+          else
+            TextField(
+              controller: _controllers[_pathKey(spec.path)],
+              maxLines: spec.kind == _PayloadFieldKind.jsonListValue ? 4 : 1,
+              keyboardType: spec.kind == _PayloadFieldKind.intValue
+                  ? TextInputType.number
+                  : (spec.kind == _PayloadFieldKind.doubleValue
+                        ? const TextInputType.numberWithOptions(
+                            decimal: true,
+                            signed: true,
+                          )
+                        : TextInputType.text),
+              decoration: InputDecoration(
+                labelText: spec.path.join('.'),
+                hintText: spec.kind == _PayloadFieldKind.jsonListValue
+                    ? '[\n  ...\n]'
+                    : null,
+                border: const OutlineInputBorder(),
+              ),
+              style: spec.kind == _PayloadFieldKind.jsonListValue
+                  ? const TextStyle(fontFamily: 'monospace')
+                  : null,
+            ),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+String _pathKey(List<String> path) => path.join('.');
+
+Map<String, dynamic> _deepCopyMap(Map<String, dynamic> value) {
+  return jsonDecode(jsonEncode(value)) as Map<String, dynamic>;
+}
+
 class ResponsiveSplitPane extends StatefulWidget {
   const ResponsiveSplitPane({
     super.key,
@@ -1203,6 +2193,120 @@ class RosApi {
 
   Future<List<Map<String, dynamic>>> getTopics() async {
     return _getList('/topics');
+  }
+
+  Future<Map<String, List<String>>> getTopicMessageTypes() async {
+    final uri = Uri.parse('$baseUrl/topic-message-types');
+    final response = await http.get(uri);
+    if (response.statusCode != 200) {
+      throw Exception('HTTP ${response.statusCode}: ${response.body}');
+    }
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    return data.map(
+      (key, value) => MapEntry(
+        key,
+        (value as List<dynamic>).map((e) => e.toString()).toList(),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> getTopicMessageTemplate(String messageType) async {
+    final uri = Uri.parse('$baseUrl/topic-message-template').replace(
+      queryParameters: {'message_type': messageType},
+    );
+    final response = await http.get(uri);
+    if (response.statusCode != 200) {
+      throw Exception('HTTP ${response.statusCode}: ${response.body}');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> createTopicPublisher({
+    required String name,
+    required String messageType,
+    int qosDepth = 10,
+  }) async {
+    final uri = Uri.parse('$baseUrl/topic-publisher');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'name': name,
+        'message_type': messageType,
+        'qos_depth': qosDepth,
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('HTTP ${response.statusCode}: ${response.body}');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> publishTopicMessage({
+    required String name,
+    required String messageType,
+    required Map<String, dynamic> message,
+    int qosDepth = 10,
+  }) async {
+    final uri = Uri.parse('$baseUrl/topic-publish');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'name': name,
+        'message_type': messageType,
+        'message': message,
+        'qos_depth': qosDepth,
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('HTTP ${response.statusCode}: ${response.body}');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> startTopicPublishLoop({
+    required String name,
+    required String messageType,
+    required Map<String, dynamic> message,
+    required double frequencyHz,
+    int qosDepth = 10,
+  }) async {
+    final uri = Uri.parse('$baseUrl/topic-publish-loop/start');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'name': name,
+        'message_type': messageType,
+        'message': message,
+        'frequency_hz': frequencyHz,
+        'qos_depth': qosDepth,
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('HTTP ${response.statusCode}: ${response.body}');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> stopTopicPublishLoop({
+    required String name,
+    required String messageType,
+  }) async {
+    final uri = Uri.parse('$baseUrl/topic-publish-loop/stop');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'name': name,
+        'message_type': messageType,
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('HTTP ${response.statusCode}: ${response.body}');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
   Future<List<Map<String, dynamic>>> getNodes() async {
