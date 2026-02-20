@@ -60,9 +60,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
-            Tab(text: 'Tópicos'),
-            Tab(text: 'Nós'),
-            Tab(text: 'Serviços'),
+            Tab(text: 'Topics'),
+            Tab(text: 'Nodes'),
+            Tab(text: 'Services'),
           ],
         ),
       ),
@@ -98,7 +98,7 @@ class _TopicsPageState extends State<TopicsPage> {
         onSelect: (topic) => setState(() => _selectedTopic = topic),
       ),
       right: _selectedTopic == null
-          ? const Center(child: Text('Selecione um tópico para ver mensagens.'))
+          ? const Center(child: Text('Select a topic to view messages.'))
           : TopicMessagesPane(
               backendUrl: widget.backendUrl,
               topicName: _selectedTopic!['name'] as String,
@@ -183,11 +183,11 @@ class _TopicsListState extends State<_TopicsList> {
                   },
                   decoration: InputDecoration(
                     isDense: true,
-                    hintText: 'Buscar tópico...',
+                    hintText: 'Search topic...',
                     prefixIcon: const Icon(Icons.search),
                     suffixIcon: _searchQuery.isNotEmpty
                         ? IconButton(
-                            tooltip: 'Limpar busca',
+                            tooltip: 'Clear search',
                             onPressed: () {
                               _searchController.clear();
                               setState(() {
@@ -203,7 +203,7 @@ class _TopicsListState extends State<_TopicsList> {
               ),
               const SizedBox(width: 8),
               IconButton(
-                tooltip: 'Atualizar',
+                tooltip: 'Refresh',
                 onPressed: () {
                   setState(() {
                     _future = RosApi(widget.backendUrl).getTopics();
@@ -212,7 +212,7 @@ class _TopicsListState extends State<_TopicsList> {
                 icon: const Icon(Icons.refresh),
               ),
               IconButton(
-                tooltip: 'Criar tópico',
+                tooltip: 'Create topic',
                 onPressed: _showCreateTopicDialog,
                 icon: const Icon(Icons.add_circle_outline),
               ),
@@ -227,7 +227,7 @@ class _TopicsListState extends State<_TopicsList> {
                 return const Center(child: CircularProgressIndicator());
               }
               if (snapshot.hasError) {
-                return Center(child: Text('Erro: ${snapshot.error}'));
+                return Center(child: Text('Error: ${snapshot.error}'));
               }
               final topics = snapshot.data ?? [];
               final filteredTopics = _searchQuery.isEmpty
@@ -256,7 +256,7 @@ class _TopicsListState extends State<_TopicsList> {
 
               if (filteredTopics.isEmpty) {
                 return const Center(
-                  child: Text('Nenhum tópico encontrado para o filtro atual.'),
+                  child: Text('No topics found for the current filter.'),
                 );
               }
 
@@ -275,8 +275,8 @@ class _TopicsListState extends State<_TopicsList> {
                     onTap: () => widget.onSelect(topic),
                     trailing: IconButton(
                       tooltip: _favoriteTopics.contains(name)
-                          ? 'Desfavoritar'
-                          : 'Favoritar',
+                          ? 'Unfavorite'
+                          : 'Favorite',
                       onPressed: () {
                         setState(() {
                           if (_favoriteTopics.contains(name)) {
@@ -314,7 +314,7 @@ class NodesPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _SimpleListPage(
-      title: 'Nós ativos',
+      title: 'Active nodes',
       fetcher: () => RosApi(backendUrl).getNodes(),
       itemBuilder: (item) => '${item['namespace']}${item['name']}',
     );
@@ -353,7 +353,7 @@ class _ServicesSplitPageState extends State<_ServicesSplitPage> {
       ),
       right: _selectedService == null
           ? const Center(
-              child: Text('Selecione um serviço para visualizar/chamar.'),
+              child: Text('Select a service to view/call.'),
             )
           : _ServiceCallPane(
               backendUrl: widget.backendUrl,
@@ -423,11 +423,11 @@ class _ServicesListState extends State<_ServicesList> {
                   },
                   decoration: InputDecoration(
                     isDense: true,
-                    hintText: 'Buscar serviço...',
+                    hintText: 'Search service...',
                     prefixIcon: const Icon(Icons.search),
                     suffixIcon: _searchQuery.isNotEmpty
                         ? IconButton(
-                            tooltip: 'Limpar busca',
+                            tooltip: 'Clear search',
                             onPressed: () {
                               _searchController.clear();
                               setState(() {
@@ -443,7 +443,7 @@ class _ServicesListState extends State<_ServicesList> {
               ),
               const SizedBox(width: 8),
               IconButton(
-                tooltip: 'Atualizar',
+                tooltip: 'Refresh',
                 onPressed: () {
                   setState(
                     () => _future = RosApi(widget.backendUrl).getServices(),
@@ -462,7 +462,7 @@ class _ServicesListState extends State<_ServicesList> {
                 return const Center(child: CircularProgressIndicator());
               }
               if (snapshot.hasError) {
-                return Center(child: Text('Erro: ${snapshot.error}'));
+                return Center(child: Text('Error: ${snapshot.error}'));
               }
               final services = snapshot.data ?? [];
               final filteredServices = _searchQuery.isEmpty
@@ -491,7 +491,7 @@ class _ServicesListState extends State<_ServicesList> {
 
               if (filteredServices.isEmpty) {
                 return const Center(
-                  child: Text('Nenhum serviço encontrado para o filtro atual.'),
+                  child: Text('No services found for the current filter.'),
                 );
               }
 
@@ -512,8 +512,8 @@ class _ServicesListState extends State<_ServicesList> {
                     onTap: () => widget.onSelect(service),
                     trailing: IconButton(
                       tooltip: _favoriteServices.contains(name)
-                          ? 'Desfavoritar'
-                          : 'Favoritar',
+                          ? 'Unfavorite'
+                          : 'Favorite',
                       onPressed: () {
                         setState(() {
                           if (_favoriteServices.contains(name)) {
@@ -623,7 +623,7 @@ class _ServiceCallPaneState extends State<_ServiceCallPane> {
     try {
       final payloadObj = jsonDecode(_payloadController.text);
       if (payloadObj is! Map<String, dynamic>) {
-        throw Exception('Payload deve ser um objeto JSON.');
+        throw Exception('Payload must be a JSON object.');
       }
       final result = await RosApi(widget.backendUrl).callService(
         name: widget.serviceName,
@@ -650,12 +650,10 @@ class _ServiceCallPaneState extends State<_ServiceCallPane> {
         ListTile(
           title: Text(widget.serviceName),
           subtitle: Text(
-            widget.serviceType.isEmpty
-                ? 'Tipo indisponível'
-                : widget.serviceType,
+            widget.serviceType.isEmpty ? 'Type unavailable' : widget.serviceType,
           ),
           trailing: IconButton(
-            tooltip: 'Recarregar schema',
+            tooltip: 'Reload schema',
             onPressed: _loadingSchema ? null : _loadSchema,
             icon: const Icon(Icons.refresh),
           ),
@@ -665,7 +663,7 @@ class _ServiceCallPaneState extends State<_ServiceCallPane> {
           child: ListView(
             padding: const EdgeInsets.all(12),
             children: [
-              const Text('Payload esperado (request template):'),
+              const Text('Expected payload (request template):'),
               const SizedBox(height: 6),
               Container(
                 padding: const EdgeInsets.all(10),
@@ -683,7 +681,7 @@ class _ServiceCallPaneState extends State<_ServiceCallPane> {
                 ),
               ),
               const SizedBox(height: 12),
-              const Text('Payload para envio (JSON):'),
+              const Text('Payload to send (JSON):'),
               const SizedBox(height: 6),
               TextField(
                 controller: _payloadController,
@@ -700,17 +698,17 @@ class _ServiceCallPaneState extends State<_ServiceCallPane> {
                     ? null
                     : _sendServiceRequest,
                 icon: const Icon(Icons.send),
-                label: Text(_sending ? 'Enviando...' : 'Enviar serviço'),
+                label: Text(_sending ? 'Sending...' : 'Call service'),
               ),
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Text(
-                  'Erro: $_error',
+                  'Error: $_error',
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ],
               const SizedBox(height: 16),
-              const Text('Formato esperado de resposta (response template):'),
+              const Text('Expected response format (response template):'),
               const SizedBox(height: 6),
               Container(
                 padding: const EdgeInsets.all(10),
@@ -729,7 +727,7 @@ class _ServiceCallPaneState extends State<_ServiceCallPane> {
               ),
               if (_responseText != null) ...[
                 const SizedBox(height: 16),
-                const Text('Resposta recebida:'),
+                const Text('Received response:'),
                 const SizedBox(height: 6),
                 Container(
                   padding: const EdgeInsets.all(10),
@@ -782,7 +780,7 @@ class _SimpleListPageState extends State<_SimpleListPage> {
         ListTile(
           title: Text(widget.title),
           trailing: IconButton(
-            tooltip: 'Atualizar',
+            tooltip: 'Refresh',
             onPressed: () => setState(() => _future = widget.fetcher()),
             icon: const Icon(Icons.refresh),
           ),
@@ -795,7 +793,7 @@ class _SimpleListPageState extends State<_SimpleListPage> {
                 return const Center(child: CircularProgressIndicator());
               }
               if (snapshot.hasError) {
-                return Center(child: Text('Erro: ${snapshot.error}'));
+                return Center(child: Text('Error: ${snapshot.error}'));
               }
               final items = snapshot.data ?? [];
               return ListView.separated(
@@ -958,14 +956,14 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
         } catch (err) {
           setState(() {
             _connecting = false;
-            _error = 'Falha ao decodificar mensagem: $err';
+            _error = 'Failed to decode message: $err';
           });
         }
       },
       onError: (err) => setState(() => _error = err.toString()),
       onDone: () => setState(() {
         _connecting = false;
-        _error ??= 'Conexão encerrada';
+        _error ??= 'Connection closed';
       }),
     );
   }
@@ -1035,7 +1033,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
       ).getTopicMessageTemplate(widget.topicType);
       final template = schema['message_template'];
       if (template is! Map<String, dynamic>) {
-        throw Exception('Template de mensagem inválido.');
+        throw Exception('Invalid message template.');
       }
       setState(() {
         _messageTemplate = _deepCopyMap(template);
@@ -1062,22 +1060,21 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
     }
     if (_topicBusyByExternalTraffic) {
       setState(() {
-        _publishError =
-            'Publicação bloqueada: o tópico já está recebendo mensagens.';
+        _publishError = 'Publishing blocked: topic is already receiving messages.';
       });
       return;
     }
     final hz = _parseLoopFrequencyHz();
     if (hz == null) {
       setState(() {
-        _publishError = 'Frequência inválida. Informe um valor > 0.';
+        _publishError = 'Invalid frequency. Enter a value > 0.';
       });
       return;
     }
     final payload = _publishFormKey.currentState?.buildPayload();
     if (payload == null) {
       setState(() {
-        _publishError = 'Payload indisponível para envio.';
+        _publishError = 'Payload unavailable for sending.';
       });
       return;
     }
@@ -1101,7 +1098,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
         _looping = true;
         _ownLoopActive = true;
         _topicBusyByExternalTraffic = false;
-        _publishInfo = 'Loop ativo em ${hz.toStringAsFixed(hz < 10 ? 2 : 1)} Hz.';
+        _publishInfo = 'Loop active at ${hz.toStringAsFixed(hz < 10 ? 2 : 1)} Hz.';
       });
     } catch (err) {
       if (mounted) {
@@ -1190,8 +1187,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   Future<void> _publishMessage() async {
     if (_topicBusyByExternalTraffic) {
       setState(() {
-        _publishError =
-            'Publicação bloqueada: o tópico já está recebendo mensagens.';
+        _publishError = 'Publishing blocked: topic is already receiving messages.';
       });
       return;
     }
@@ -1206,7 +1202,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
     try {
       final payload = _publishFormKey.currentState?.buildPayload();
       if (payload == null) {
-        throw Exception('Payload indisponível para envio.');
+        throw Exception('Payload unavailable for sending.');
       }
       _armSelfTrafficIgnore();
       await RosApi(widget.backendUrl).publishTopicMessage(
@@ -1216,7 +1212,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
       );
       if (mounted) {
         setState(() {
-          _publishInfo = 'Mensagem publicada com sucesso.';
+          _publishInfo = 'Message published successfully.';
         });
       }
     } catch (err) {
@@ -1238,9 +1234,9 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Erro: $_error'),
+            Text('Error: $_error'),
             const SizedBox(height: 12),
-            TextButton(onPressed: _connect, child: const Text('Reconectar')),
+            TextButton(onPressed: _connect, child: const Text('Reconnect')),
           ],
         ),
       );
@@ -1249,11 +1245,9 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
     return Column(
       children: [
         ListTile(
-          title: Text('Tópico: ${widget.topicName}'),
+          title: Text('Topic: ${widget.topicName}'),
           subtitle: Text(
-            _connecting
-                ? 'Conectando...'
-                : '${widget.topicType} • ${_messages.length} mensagens recentes',
+            _connecting ? 'Connecting...' : '${widget.topicType} • ${_messages.length} recent messages',
           ),
           trailing: _isImageTopic()
               ? OutlinedButton.icon(
@@ -1267,15 +1261,15 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
                         ? Icons.text_snippet_outlined
                         : Icons.image_outlined,
                   ),
-                  label: Text(_imageViewEnabled ? 'Ver texto' : 'Ver imagem'),
+                  label: Text(_imageViewEnabled ? 'View text' : 'View image'),
                 )
               : null,
         ),
         const Divider(height: 1),
         ExpansionTile(
-          title: const Text('Publicar mensagem'),
+          title: const Text('Publish message'),
           subtitle: Text(
-            widget.topicType.isEmpty ? 'Tipo indisponível' : widget.topicType,
+            widget.topicType.isEmpty ? 'Type unavailable' : widget.topicType,
           ),
           childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
           children: [
@@ -1304,7 +1298,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
                   decimal: true,
                 ),
                 decoration: const InputDecoration(
-                  labelText: 'Frequência de publicação (Hz)',
+                  labelText: 'Publish frequency (Hz)',
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -1322,7 +1316,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
                         ? null
                         : _publishMessage,
                     icon: const Icon(Icons.send),
-                    label: Text(_publishing ? 'Publicando...' : 'Publicar'),
+                    label: Text(_publishing ? 'Publishing...' : 'Publish'),
                   ),
                   FilledButton.tonalIcon(
                     onPressed:
@@ -1335,9 +1329,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
                                     : _startLoopPublishing)),
                     icon: Icon(_looping ? Icons.stop : Icons.repeat),
                     label: Text(
-                      _loopActionInProgress
-                          ? 'Processando...'
-                          : (_looping ? 'Parar loop' : 'Iniciar loop'),
+                      _loopActionInProgress ? 'Processing...' : (_looping ? 'Stop loop' : 'Start loop'),
                     ),
                   ),
                 ],
@@ -1345,12 +1337,12 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
               if (publishBlocked) ...[
                 const SizedBox(height: 8),
                 Text(
-                  'Publicação bloqueada: tópico com tráfego ativo.',
+                  'Publishing blocked: topic has active traffic.',
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ],
             ] else if (!_loadingTemplate) ...[
-              const Text('Não foi possível carregar os campos da mensagem.'),
+              const Text('Could not load message fields.'),
             ],
             if (_publishInfo != null) ...[
               const SizedBox(height: 8),
@@ -1362,7 +1354,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
             if (_publishError != null) ...[
               const SizedBox(height: 8),
               Text(
-                'Erro: $_publishError',
+                'Error: $_publishError',
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ],
@@ -1412,15 +1404,15 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   Widget _buildImagePreview() {
     final frameMsg = _latestImageMessage();
     if (frameMsg == null) {
-      return const Center(child: Text('Aguardando frame de imagem...'));
+      return const Center(child: Text('Waiting for image frame...'));
     }
 
     final frame = frameMsg['message'] as Map<String, dynamic>;
     final png = _sensorImageToPng(frameMsg);
     if (png == null) {
-      final encoding = frame['encoding']?.toString() ?? 'desconhecido';
+      final encoding = frame['encoding']?.toString() ?? 'unknown';
       return Center(
-        child: Text('Nao foi possivel renderizar imagem (encoding: $encoding)'),
+        child: Text('Could not render image (encoding: $encoding)'),
       );
     }
 
@@ -1625,7 +1617,7 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
       ).getTopicMessageTemplate(messageType);
       final template = schema['message_template'];
       if (template is! Map<String, dynamic>) {
-        throw Exception('Template de mensagem inválido.');
+        throw Exception('Invalid message template.');
       }
       setState(() => _template = _deepCopyMap(template));
     } catch (err) {
@@ -1639,11 +1631,11 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
     final topicName = _topicController.text.trim();
     final messageType = _selectedType;
     if (topicName.isEmpty) {
-      setState(() => _error = 'Informe o nome do tópico.');
+      setState(() => _error = 'Enter a topic name.');
       return;
     }
     if (messageType == null || messageType.isEmpty) {
-      setState(() => _error = 'Selecione um tipo de mensagem.');
+      setState(() => _error = 'Select a message type.');
       return;
     }
 
@@ -1660,7 +1652,7 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
       if (_publishInitial) {
         final payload = _payloadFormKey.currentState?.buildPayload();
         if (payload == null) {
-          throw Exception('Payload inicial indisponível.');
+          throw Exception('Initial payload unavailable.');
         }
         await api.publishTopicMessage(
           name: topicName,
@@ -1692,7 +1684,7 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
         : (_messageTypes[_selectedPackage] ?? const <String>[]);
 
     return AlertDialog(
-      title: const Text('Criar tópico'),
+      title: const Text('Create topic'),
       content: SizedBox(
         width: 620,
         child: SingleChildScrollView(
@@ -1703,8 +1695,8 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
               TextField(
                 controller: _topicController,
                 decoration: const InputDecoration(
-                  labelText: 'Nome do tópico',
-                  hintText: '/meu_topico',
+                  labelText: 'Topic name',
+                  hintText: '/my_topic',
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -1713,7 +1705,7 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
               DropdownButtonFormField<String>(
                 value: _selectedPackage,
                 decoration: const InputDecoration(
-                  labelText: 'Pacote',
+                  labelText: 'Package',
                   border: OutlineInputBorder(),
                 ),
                 items: _messageTypes.keys
@@ -1747,7 +1739,7 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
                     ? _selectedType
                     : null,
                 decoration: const InputDecoration(
-                  labelText: 'Tipo de mensagem',
+                  labelText: 'Message type',
                   border: OutlineInputBorder(),
                 ),
                 items: currentTypes
@@ -1778,7 +1770,7 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
                         setState(() => _publishInitial = value ?? false);
                       },
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Publicar mensagem inicial após criar'),
+                title: const Text('Publish initial message after creating'),
               ),
               if (_loadingTemplate) const LinearProgressIndicator(minHeight: 2),
               if (_template != null) ...[
@@ -1788,7 +1780,7 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
               if (_error != null) ...[
                 const SizedBox(height: 10),
                 Text(
-                  'Erro: $_error',
+                  'Error: $_error',
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ],
@@ -1799,11 +1791,11 @@ class _CreateTopicDialogState extends State<_CreateTopicDialog> {
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
+          child: const Text('Cancel'),
         ),
         FilledButton(
           onPressed: _saving ? null : _createTopic,
-          child: Text(_saving ? 'Criando...' : 'Criar'),
+          child: Text(_saving ? 'Creating...' : 'Create'),
         ),
       ],
     );
@@ -1993,13 +1985,13 @@ class _PayloadFieldsFormState extends State<_PayloadFieldsForm> {
           case _PayloadFieldKind.jsonListValue:
             final decoded = jsonDecode(_controllers[key]!.text);
             if (decoded is! List<dynamic>) {
-              throw const FormatException('deve ser uma lista JSON');
+              throw const FormatException('must be a JSON list');
             }
             parsedValue = decoded;
             break;
         }
       } catch (err) {
-        throw Exception('Campo ${spec.path.join('.')} inválido: $err');
+        throw Exception('Invalid field ${spec.path.join('.')}: $err');
       }
       _setValueAtPath(payload, spec.path, parsedValue);
     }
@@ -2017,11 +2009,11 @@ class _PayloadFieldsFormState extends State<_PayloadFieldsForm> {
       if (current is Map<String, dynamic>) {
         current = current[segment];
       } else {
-        throw Exception('Estrutura inválida no caminho ${path.join('.')}');
+        throw Exception('Invalid structure at path ${path.join('.')}');
       }
     }
     if (current is! Map<String, dynamic>) {
-      throw Exception('Estrutura inválida no caminho ${path.join('.')}');
+      throw Exception('Invalid structure at path ${path.join('.')}');
     }
     current[path.last] = value;
   }
@@ -2036,7 +2028,7 @@ class _PayloadFieldsFormState extends State<_PayloadFieldsForm> {
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
-              'O timestamp do header será preenchido automaticamente.',
+              'Header timestamp will be filled automatically.',
               style: TextStyle(color: Theme.of(context).colorScheme.primary),
             ),
           ),
