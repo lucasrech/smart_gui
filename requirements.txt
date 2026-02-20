@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+wsproto
+numpy
+pillow
+rosidl-runtime-py

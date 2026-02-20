@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>smart_gui</name>
+  <version>0.1.0</version>
+  <description>ROS 2 package for Smart GUI backend API.</description>
+  <maintainer email="rech@todo.todo">rech</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>rosidl_runtime_py</depend>
+
+  <exec_depend>python3-fastapi</exec_depend>
+  <exec_depend>python3-uvicorn</exec_depend>
+  <exec_depend>python3-wsproto</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-pil</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
