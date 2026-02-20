@@ -1,115 +1,165 @@
-# smart_gui
+# 🛰️ smart_gui
 
-## Resumo do pacote e dependências
-O `smart_gui` é um pacote ROS 2 (`ament_python`) que fornece:
-- Backend HTTP/WebSocket em FastAPI para inspeção do grafo ROS 2.
-- Interface web Flutter para listar tópicos, nós e serviços.
-- Streaming de mensagens por tópico via WebSocket.
-- Visualização de tópicos `sensor_msgs/msg/Image` com compressão JPEG no backend para reduzir payload.
+[![ROS 2](https://img.shields.io/badge/ROS%202-Jazzy-22314E?logo=ros&logoColor=white)](https://docs.ros.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Flutter Web](https://img.shields.io/badge/Flutter-Web-02569B?logo=flutter&logoColor=white)](https://flutter.dev/)
+![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)
 
-Dependências principais do backend Python:
-- `fastapi`
-- `uvicorn[standard]`
-- `wsproto`
-- `numpy`
-- `pillow`
-- `rosidl-runtime-py`
+`smart_gui` is a ROS 2 (`ament_python`) package focused on monitoring and testing ROS systems through a web interface. It combines a FastAPI backend and a Flutter frontend to inspect the ROS graph, stream live topic data, call services, and publish messages (including backend-managed loop publishing) without requiring custom debug scripts.
 
-Dependências ROS 2 (via sistema):
-- `rclpy`
-- `rosidl_runtime_py`
+## ✨ Features
 
-Dependências de interface (Flutter):
-- Projeto em `frontend/` com dependências no `frontend/pubspec.yaml`.
+- Graph inspection:
+  - `GET /topics`
+  - `GET /nodes`
+  - `GET /services`
+- Service tooling:
+  - `GET /service-schema`
+  - `POST /service-call`
+- Topic tooling:
+  - Create a publisher for a topic/type.
+  - Publish one message.
+  - Start/stop backend publish loops (no per-message HTTP traffic from frontend).
+- Live topic monitor via WebSocket:
+  - `WS /ws/topics/{topic}`
+- Special handling for `sensor_msgs/msg/Image`:
+  - Backend JPEG compression to reduce payload size.
 
-Arquivo de dependências Python deste pacote:
-- `requirements.txt`
+## 🗂️ Repository Layout
 
-## Como funciona e para que serve
-O objetivo do `smart_gui` é facilitar inspeção e depuração de sistemas ROS 2 em uma interface web.
+- `smart_gui/ros2_inspector_api.py`: main ROS2 + FastAPI backend node.
+- `frontend/`: Flutter web application.
+- `launch/smart_gui_api.launch.py`: launch backend and optional frontend process.
+- `smart_gui/random_int8_topics_node.py`: test node that publishes random `std_msgs/msg/Int8` on random topics.
 
-Fluxo geral:
-1. O backend cria um nó ROS 2 (`ros2_inspector_api`) e consulta:
-- tópicos (`/topics`)
-- nós (`/nodes`)
-- serviços (`/services`)
+## 📦 Requirements
 
-2. Quando a interface seleciona um tópico, ela abre um WebSocket em:
-- `/ws/topics/{topic}`
+- ROS 2 Jazzy (or compatible environment with `rclpy`).
+- `colcon`.
+- Python 3.
+- Flutter (only if you want to run the web frontend with `flutter run`).
 
-3. O backend cria uma subscription ROS 2 para o tópico e encaminha mensagens para a interface.
+## 🛠️ Build
 
-4. Para mensagens comuns, envia o JSON completo (`message_to_ordereddict`).
+From your ROS 2 workspace root:
 
-5. Para `sensor_msgs/msg/Image`, o backend:
-- converte o frame
-- comprime para JPEG
-- envia base64 do JPEG + metadados
-Isso reduz bastante o volume transferido e evita travamentos no navegador.
-
-A interface possui:
-- Aba `Tópicos` com painel dividido (lista + visualização)
-- Divisor arrastável para redimensionar os dois painéis
-- Alternância entre `Ver texto` e `Ver imagem` para tópicos de imagem
-
-## Tutorial de uso
-### 1. Pré-requisitos
-- ROS 2 Jazzy instalado
-- `colcon` instalado
-- Flutter instalado (para rodar a interface via `flutter run`)
-
-### 2. Build do pacote
-No workspace ROS 2:
 ```bash
-cd ~/lacbot_ws
+cd ~/colcon_ws
 source /opt/ros/jazzy/setup.bash
-colcon build --packages-select smart_gui
+colcon build --packages-select smart_gui --symlink-install
 source install/setup.bash
 ```
 
-### 3. Executar backend + interface juntos
+## ▶️ Run
+
+### 1) Backend + frontend together (recommended for development)
+
 ```bash
 ros2 launch smart_gui smart_gui_api.launch.py \
-  frontend_command:='flutter run -d web-server --web-hostname 0.0.0.0 --web-port 3000'
+  frontend_command:='NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 flutter run -d web-server --web-hostname 0.0.0.0 --web-port 3000 --profile'
 ```
 
-Acessar no navegador:
-- `http://localhost:3000` (máquina local)
-- `http://IP_DA_MAQUINA:3000` (outro dispositivo na rede)
+Open:
+- Local machine: `http://localhost:3000`
+- Another device in LAN: `http://<YOUR_MACHINE_IP>:3000`
 
-### 4. Executar somente backend
+### 2) Backend only
+
 ```bash
 ros2 launch smart_gui smart_gui_api.launch.py run_frontend:=false
 ```
 
-### 5. Executar backend sem launch (direto)
+### 3) Backend only (direct run)
+
 ```bash
 ros2 run smart_gui smart_gui_api --host 0.0.0.0 --port 8000
 ```
 
-### 6. Endpoints disponíveis
+## 🔌 API Endpoints
+
+### Basic
 - `GET /health`
 - `GET /topics`
 - `GET /nodes`
 - `GET /services`
+
+### Topic message types/templates
+- `GET /topic-message-types`
+- `GET /topic-message-template?message_type=<pkg/msg/Type>`
+
+### Topic publish control
+- `POST /topic-publisher`
+- `POST /topic-publish`
+- `POST /topic-publish-loop/start`
+- `POST /topic-publish-loop/stop`
+
+### Services
+- `GET /service-schema?name=<service>&service_type=<pkg/srv/Type>`
+- `POST /service-call`
+
+### WebSocket
 - `WS /ws/topics/{topic}`
 
-### 7. Uso da interface
-1. Abra a aba `Tópicos`.
-2. Clique em um tópico da lista.
-3. No painel da direita:
-- Mensagens padrão: texto JSON.
-- `sensor_msgs/msg/Image`: botão para alternar entre `Ver texto` e `Ver imagem`.
-4. Arraste a barra vertical entre os painéis para ajustar o tamanho da lista e da visualização.
+## 🔁 Backend-Managed Topic Loop Publishing
 
-### 8. Troubleshooting rápido
-- Se a interface não carregar dados, teste backend:
+Loop publishing is handled by the backend (thread per topic/type loop), so the frontend does not send one HTTP request per message.
+
+Example:
+
 ```bash
-curl http://localhost:8000/health
+curl -X POST http://127.0.0.1:8000/topic-publish-loop/start \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "/demo_int",
+    "message_type": "std_msgs/msg/Int32",
+    "message": {"data": 10},
+    "frequency_hz": 5.0
+  }'
 ```
-- Se aparecerem muitos warnings do CycloneDDS, tente:
+
+Stop loop:
+
 ```bash
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-unset CYCLONEDDS_URI
+curl -X POST http://127.0.0.1:8000/topic-publish-loop/stop \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "/demo_int",
+    "message_type": "std_msgs/msg/Int32"
+  }'
 ```
-- Se o Flutter mostrar versão antiga da página, force reload no navegador (`Ctrl+F5`).
+
+## 🧪 Random Test Publisher Node
+
+Run a helper node that creates random topic names and publishes random `Int8` values:
+
+```bash
+ros2 run smart_gui random_int8_topics
+```
+
+Optional arguments:
+
+```bash
+ros2 run smart_gui random_int8_topics --topic-count 5 --hz 5.0
+```
+
+## 📱 Notes for Mobile/LAN Access
+
+- The backend usually runs on port `8000`, frontend on `3000`.
+- If running inside WSL2, make sure Windows forwards ports (3000/8000) to WSL and firewall rules allow inbound connections.
+- Access from phone should use Windows LAN IP, not WSL internal IP.
+
+## 🧭 Troubleshooting
+
+- Backend health check:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+- Confirm loop endpoints are available:
+
+```bash
+curl -s http://127.0.0.1:8000/openapi.json | rg 'topic-publish-loop/start|topic-publish-loop/stop'
+```
+
+- If frontend looks stale on mobile browser, force refresh or open in private/incognito window.
