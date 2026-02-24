@@ -68,6 +68,13 @@ SUPPORTED_TOPIC_MESSAGE_TYPES: Dict[str, List[str]] = {
     ],
 }
 
+# Internal ROS 2 topics hidden from the main topic browser UI.
+# They remain accessible for dedicated features (e.g., `/rosout` log viewer).
+INTERNAL_TOPICS_HIDDEN_FROM_LIST = {
+    "/parameter_events",
+    "/rosout",
+}
+
 
 class TopicLoopPublisher:
     """Container holding lifecycle primitives for a backend publish-loop worker."""
@@ -126,9 +133,20 @@ class Ros2Manager:
             raise ValueError("topic name cannot be empty")
         return topic if topic.startswith("/") else f"/{topic}"
 
-    def list_topics(self) -> List[Dict[str, Any]]:
-        """Return ROS topics and their advertised message types."""
+    def list_topics(self, include_hidden_internal: bool = False) -> List[Dict[str, Any]]:
+        """Return ROS topics and their advertised message types.
+
+        Args:
+            include_hidden_internal: Include internal ROS topics normally hidden
+                from the main UI topic list (e.g. `/rosout`, `/parameter_events`).
+        """
         topics = self._node.get_topic_names_and_types()
+        if not include_hidden_internal:
+            topics = [
+                (name, types)
+                for name, types in topics
+                if name not in INTERNAL_TOPICS_HIDDEN_FROM_LIST
+            ]
         return [{"name": name, "types": types} for name, types in topics]
 
     def list_nodes(self) -> List[Dict[str, Any]]:
@@ -655,7 +673,9 @@ async def topic_ws(websocket: WebSocket, topic: str) -> None:
     """Stream messages from a selected ROS topic over WebSocket."""
     await websocket.accept()
 
-    topics = ros2.list_topics()
+    # Use the unfiltered topic list here so dedicated UI tabs (e.g. `/rosout`)
+    # can subscribe even though the topic is hidden from the main topics list.
+    topics = ros2.list_topics(include_hidden_internal=True)
     match = next((t for t in topics if t["name"] == f"/{topic}" or t["name"] == topic), None)
     if match is None:
         await websocket.send_json({"error": "topic_not_found", "topic": topic})

@@ -36,7 +36,7 @@ class RosInspectorApp extends StatelessWidget {
   }
 }
 
-/// Main page with top-level tabs (Topics, Nodes, Services).
+/// Main page with top-level tabs (Topics, Log, Nodes, Services).
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -53,7 +53,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     _backendUrl = RosApi.defaultBaseUrl();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
   }
 
   @override
@@ -71,6 +71,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           controller: _tabController,
           tabs: const [
             Tab(text: 'Topics'),
+            Tab(text: 'Log'),
             Tab(text: 'Nodes'),
             Tab(text: 'Services'),
           ],
@@ -80,6 +81,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         controller: _tabController,
         children: [
           TopicsPage(backendUrl: _backendUrl),
+          LogsPage(backendUrl: _backendUrl),
           NodesPage(backendUrl: _backendUrl),
           ServicesPage(backendUrl: _backendUrl),
         ],
@@ -316,6 +318,306 @@ class _TopicsListState extends State<_TopicsList> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Dedicated `/rosout` viewer for ROS 2 runtime logs.
+class LogsPage extends StatefulWidget {
+  const LogsPage({super.key, required this.backendUrl});
+
+  final String backendUrl;
+
+  @override
+  State<LogsPage> createState() => _LogsPageState();
+}
+
+/// Connects to `/rosout` and renders incoming `rcl_interfaces/msg/Log` messages.
+class _LogsPageState extends State<LogsPage> {
+  WebSocketChannel? _channel;
+  final List<Map<String, dynamic>> _logs = [];
+  bool _connecting = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _connect();
+  }
+
+  @override
+  void didUpdateWidget(covariant LogsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.backendUrl != widget.backendUrl) {
+      _logs.clear();
+      _error = null;
+      _connect();
+    }
+  }
+
+  @override
+  void dispose() {
+    _channel?.sink.close();
+    super.dispose();
+  }
+
+  void _connect() {
+    _channel?.sink.close();
+    setState(() {
+      _connecting = true;
+      _error = null;
+    });
+
+    final wsBase = RosApi.toWebSocketUrl(widget.backendUrl);
+    final uri = Uri.parse('$wsBase/ws/topics/rosout');
+    _channel = WebSocketChannel.connect(uri);
+
+    _channel!.stream.listen(
+      (event) {
+        try {
+          final payload = event is String
+              ? event
+              : utf8.decode(event as List<int>);
+          final data = jsonDecode(payload) as Map<String, dynamic>;
+
+          if (data.containsKey('error')) {
+            setState(() {
+              _connecting = false;
+              _error = data['error']?.toString() ?? 'Unknown error';
+            });
+            return;
+          }
+
+          // Initial handshake payload contains topic/type only.
+          final message = data['message'];
+          if (message is! Map<String, dynamic>) {
+            setState(() {
+              _connecting = false;
+              _error = null;
+            });
+            return;
+          }
+
+          setState(() {
+            _connecting = false;
+            _error = null;
+            _logs.insert(0, {
+              'stream_timestamp': data['timestamp'],
+              'type': data['type'],
+              'topic': data['topic'],
+              'message': message,
+            });
+            if (_logs.length > 500) {
+              _logs.removeLast();
+            }
+          });
+        } catch (err) {
+          setState(() {
+            _connecting = false;
+            _error = 'Failed to decode rosout message: $err';
+          });
+        }
+      },
+      onError: (err) => setState(() {
+        _connecting = false;
+        _error = err.toString();
+      }),
+      onDone: () => setState(() {
+        _connecting = false;
+        _error ??= 'Connection closed';
+      }),
+    );
+  }
+
+  String _levelLabel(int level) {
+    if (level >= 50) return 'FATAL';
+    if (level >= 40) return 'ERROR';
+    if (level >= 30) return 'WARN';
+    if (level >= 20) return 'INFO';
+    if (level >= 10) return 'DEBUG';
+    return 'LOG';
+  }
+
+  Color _levelColor(BuildContext context, int level) {
+    final scheme = Theme.of(context).colorScheme;
+    if (level >= 50) return const Color(0xFF8B0000);
+    if (level >= 40) return scheme.error;
+    if (level >= 30) return const Color(0xFFB26A00);
+    if (level >= 20) return const Color(0xFF0B6E4F);
+    if (level >= 10) return scheme.primary;
+    return scheme.secondary;
+  }
+
+  String _formatStamp(Map<String, dynamic> msg) {
+    try {
+      final stamp = msg['stamp'] as Map<String, dynamic>?;
+      final sec = (stamp?['sec'] as num?)?.toInt() ?? 0;
+      final nanosec = (stamp?['nanosec'] as num?)?.toInt() ?? 0;
+      final millis = (sec * 1000) + (nanosec / 1000000).round();
+      final dt = DateTime.fromMillisecondsSinceEpoch(
+        millis,
+        isUtc: true,
+      ).toLocal();
+      final hh = dt.hour.toString().padLeft(2, '0');
+      final mm = dt.minute.toString().padLeft(2, '0');
+      final ss = dt.second.toString().padLeft(2, '0');
+      final ms = dt.millisecond.toString().padLeft(3, '0');
+      return '$hh:$mm:$ss.$ms';
+    } catch (_) {
+      return '--:--:--.---';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Text(
+                'ROS 2 Execution Logs (/rosout)',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(width: 12),
+              if (_connecting) const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              if (_error != null) ...[
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    _error!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
+                ),
+              ] else
+                const Spacer(),
+              TextButton.icon(
+                onPressed: _connect,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Reconnect'),
+              ),
+              const SizedBox(width: 8),
+              TextButton.icon(
+                onPressed: () => setState(_logs.clear),
+                icon: const Icon(Icons.clear_all),
+                label: const Text('Clear'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: _logs.isEmpty
+                ? const Center(
+                    child: Text('Waiting for messages on /rosout...'),
+                  )
+                : ListView.separated(
+                    itemCount: _logs.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final item = _logs[index];
+                      final msg =
+                          item['message'] as Map<String, dynamic>? ??
+                          const <String, dynamic>{};
+                      final level = (msg['level'] as num?)?.toInt() ?? 0;
+                      final levelColor = _levelColor(context, level);
+                      final loggerName = msg['name']?.toString() ?? '-';
+                      final text = msg['msg']?.toString() ?? '';
+                      final file = msg['file']?.toString() ?? '';
+                      final function = msg['function']?.toString() ?? '';
+                      final line = (msg['line'] as num?)?.toInt();
+
+                      final sourceBits = <String>[
+                        if (file.isNotEmpty) file,
+                        if (function.isNotEmpty) function,
+                        if (line != null) 'line $line',
+                      ];
+
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surfaceContainerLow,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: Theme.of(context).dividerColor.withValues(
+                              alpha: 0.35,
+                            ),
+                          ),
+                        ),
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 6,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: levelColor.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(
+                                      color: levelColor.withValues(alpha: 0.45),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    _levelLabel(level),
+                                    style: TextStyle(
+                                      color: levelColor,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                                Text(
+                                  _formatStamp(msg),
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                                Text(
+                                  loggerName,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            SelectableText(
+                              text.isEmpty ? '(empty log message)' : text,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                            if (sourceBits.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                sourceBits.join('  |  '),
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      color: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.color
+                                          ?.withValues(alpha: 0.75),
+                                    ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -36,6 +36,7 @@ setup(
         "console_scripts": [
             "smart_gui_api = smart_gui.ros2_inspector_api:main",
             "random_int8_topics = smart_gui.random_int8_topics_node:main",
+            "int_topics_and_logs = smart_gui.int_topics_and_logs_node:main",
         ],
     },
 )
