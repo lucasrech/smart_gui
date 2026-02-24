@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:web_socket_channel/web_socket_channel.dart';
+
+import 'file_download_stub.dart'
+    if (dart.library.html) 'file_download_web.dart' as file_download;
 
 /// Smart GUI Flutter web client.
 ///
@@ -339,6 +343,10 @@ class _LogsPageState extends State<LogsPage> {
   bool _connecting = false;
   String? _error;
   int _selectedLogLevelFilter = 0;
+  bool _isRecordingLogs = false;
+  bool _savingRecording = false;
+  String? _recordingRunId;
+  final List<String> _recordedLogLines = [];
 
   @override
   void initState() {
@@ -411,6 +419,9 @@ class _LogsPageState extends State<LogsPage> {
             if (_logs.length > 500) {
               _logs.removeLast();
             }
+            if (_isRecordingLogs) {
+              _recordedLogLines.add(_rosoutJsonLine(message));
+            }
           });
         } catch (err) {
           setState(() {
@@ -432,6 +443,10 @@ class _LogsPageState extends State<LogsPage> {
 
   String _levelLabel(int level) {
     if (level <= 0) return 'ALL';
+    return _severityLabel(level);
+  }
+
+  String _severityLabel(int level) {
     if (level >= 50) return 'FATAL';
     if (level >= 40) return 'ERROR';
     if (level >= 30) return 'WARN';
@@ -467,6 +482,154 @@ class _LogsPageState extends State<LogsPage> {
       return '$hh:$mm:$ss.$ms';
     } catch (_) {
       return '--:--:--.---';
+    }
+  }
+
+  DateTime? _stampToUtcDateTime(Map<String, dynamic> msg) {
+    try {
+      final stamp = msg['stamp'] as Map<String, dynamic>?;
+      final sec = (stamp?['sec'] as num?)?.toInt();
+      final nanosec = (stamp?['nanosec'] as num?)?.toInt();
+      if (sec == null || nanosec == null) {
+        return null;
+      }
+      final msSinceEpoch = (sec * 1000) + (nanosec ~/ 1000000);
+      final microsRemainder = (nanosec % 1000000) ~/ 1000;
+      return DateTime.fromMillisecondsSinceEpoch(
+        msSinceEpoch,
+        isUtc: true,
+      ).add(Duration(microseconds: microsRemainder));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _stampToUtcIsoString(Map<String, dynamic> msg) {
+    final dt = _stampToUtcDateTime(msg) ?? DateTime.now().toUtc();
+    return dt.toUtc().toIso8601String();
+  }
+
+  ({String namespace, String node}) _deriveNodeAndNamespace(String loggerName) {
+    if (!loggerName.startsWith('/')) {
+      return (namespace: '', node: loggerName);
+    }
+    final parts = loggerName.split('/').where((part) => part.isNotEmpty).toList();
+    if (parts.isEmpty) {
+      return (namespace: '', node: loggerName);
+    }
+    if (parts.length == 1) {
+      return (namespace: '/', node: parts.first);
+    }
+    return (
+      namespace: '/${parts.sublist(0, parts.length - 1).join('/')}',
+      node: parts.last,
+    );
+  }
+
+  String _makeRecordingRunId() {
+    final now = DateTime.now().toUtc();
+    final ts =
+        '${now.year.toString().padLeft(4, '0')}'
+        '${now.month.toString().padLeft(2, '0')}'
+        '${now.day.toString().padLeft(2, '0')}'
+        'T'
+        '${now.hour.toString().padLeft(2, '0')}'
+        '${now.minute.toString().padLeft(2, '0')}'
+        '${now.second.toString().padLeft(2, '0')}'
+        'Z';
+    final suffix = Random().nextInt(0xFFFFFFFF).toRadixString(16).padLeft(8, '0');
+    return '${ts}_$suffix';
+  }
+
+  String _rosoutJsonLine(Map<String, dynamic> msg) {
+    final loggerName = msg['name']?.toString() ?? '';
+    final level = (msg['level'] as num?)?.toInt() ?? 0;
+    final nodeInfo = _deriveNodeAndNamespace(loggerName);
+    final kv = <String, dynamic>{};
+
+    final file = msg['file']?.toString();
+    final function = msg['function']?.toString();
+    final line = (msg['line'] as num?)?.toInt();
+    if (file != null && file.isNotEmpty) {
+      kv['file'] = file;
+    }
+    if (function != null && function.isNotEmpty) {
+      kv['function'] = function;
+    }
+    if (line != null) {
+      kv['line'] = line;
+    }
+
+    final record = <String, dynamic>{
+      'ts': _stampToUtcIsoString(msg),
+      'level': _severityLabel(level),
+      'node': nodeInfo.node.isEmpty ? loggerName : nodeInfo.node,
+      'logger': loggerName,
+      'msg': msg['msg']?.toString() ?? '',
+      'run_id': _recordingRunId ?? '',
+      'namespace': nodeInfo.namespace,
+      'source': 'rosout',
+      'kv': kv,
+    };
+
+    return jsonEncode(record);
+  }
+
+  void _startLogRecording() {
+    setState(() {
+      _recordingRunId = _makeRecordingRunId();
+      _recordedLogLines.clear();
+      _isRecordingLogs = true;
+    });
+  }
+
+  Future<void> _stopLogRecording() async {
+    if (!_isRecordingLogs || _savingRecording) {
+      return;
+    }
+
+    final runId = _recordingRunId ?? _makeRecordingRunId();
+    final lines = List<String>.from(_recordedLogLines);
+    final filename = 'rosout_$runId.jsonl';
+    final content = lines.isEmpty ? '' : '${lines.join('\n')}\n';
+
+    setState(() {
+      _isRecordingLogs = false;
+      _savingRecording = true;
+    });
+
+    try {
+      final ok = await file_download.downloadTextFile(
+        filename: filename,
+        content: content,
+        mimeType: 'application/x-ndjson;charset=utf-8',
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            ok
+                ? 'Log recording saved: $filename (${lines.length} entries)'
+                : 'Download is not supported on this platform build.',
+          ),
+        ),
+      );
+    } catch (err) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save log recording: $err')),
+      );
+    } finally {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _savingRecording = false;
+      });
     }
   }
 
@@ -545,6 +708,26 @@ class _LogsPageState extends State<LogsPage> {
                   },
                 ),
               ),
+              ElevatedButton.icon(
+                onPressed: _isRecordingLogs || _savingRecording
+                    ? null
+                    : _startLogRecording,
+                icon: const Icon(Icons.fiber_manual_record),
+                label: const Text('Start recording'),
+              ),
+              ElevatedButton.icon(
+                onPressed: _isRecordingLogs && !_savingRecording
+                    ? _stopLogRecording
+                    : null,
+                icon: _savingRecording
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.stop_circle_outlined),
+                label: const Text('Stop recording'),
+              ),
               TextButton.icon(
                 onPressed: _connect,
                 icon: const Icon(Icons.refresh),
@@ -559,6 +742,16 @@ class _LogsPageState extends State<LogsPage> {
                 'Showing ${filteredLogs.length}/${_logs.length}',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+              if (_isRecordingLogs || _savingRecording)
+                Text(
+                  _savingRecording
+                      ? 'Saving...'
+                      : 'Recording (${_recordedLogLines.length})',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 8),
