@@ -338,6 +338,7 @@ class _LogsPageState extends State<LogsPage> {
   final List<Map<String, dynamic>> _logs = [];
   bool _connecting = false;
   String? _error;
+  int _selectedLogLevelFilter = 0;
 
   @override
   void initState() {
@@ -430,6 +431,7 @@ class _LogsPageState extends State<LogsPage> {
   }
 
   String _levelLabel(int level) {
+    if (level <= 0) return 'ALL';
     if (level >= 50) return 'FATAL';
     if (level >= 40) return 'ERROR';
     if (level >= 30) return 'WARN';
@@ -470,6 +472,15 @@ class _LogsPageState extends State<LogsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final filteredLogs = _logs.where((item) {
+      if (_selectedLogLevelFilter <= 0) {
+        return true;
+      }
+      final msg = item['message'] as Map<String, dynamic>?;
+      final level = (msg?['level'] as num?)?.toInt() ?? 0;
+      return level == _selectedLogLevelFilter;
+    }).toList();
+
     return Padding(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -498,30 +509,73 @@ class _LogsPageState extends State<LogsPage> {
                 ),
               ] else
                 const Spacer(),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 210,
+                child: DropdownButtonFormField<int>(
+                  value: _selectedLogLevelFilter,
+                  isDense: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Log level',
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 0, child: Text('All levels')),
+                    DropdownMenuItem(value: 10, child: Text('DEBUG (10)')),
+                    DropdownMenuItem(value: 20, child: Text('INFO (20)')),
+                    DropdownMenuItem(value: 30, child: Text('WARN (30)')),
+                    DropdownMenuItem(value: 40, child: Text('ERROR (40)')),
+                    DropdownMenuItem(value: 50, child: Text('FATAL (50)')),
+                  ],
+                  onChanged: (value) {
+                    setState(() {
+                      _selectedLogLevelFilter = value ?? 0;
+                    });
+                  },
+                ),
+              ),
               TextButton.icon(
                 onPressed: _connect,
                 icon: const Icon(Icons.refresh),
                 label: const Text('Reconnect'),
               ),
-              const SizedBox(width: 8),
               TextButton.icon(
                 onPressed: () => setState(_logs.clear),
                 icon: const Icon(Icons.clear_all),
                 label: const Text('Clear'),
               ),
+              Text(
+                'Showing ${filteredLogs.length}/${_logs.length}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ],
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: _logs.isEmpty
-                ? const Center(
-                    child: Text('Waiting for messages on /rosout...'),
+            child: filteredLogs.isEmpty
+                ? Center(
+                    child: Text(
+                      _logs.isEmpty
+                          ? 'Waiting for messages on /rosout...'
+                          : 'No log messages match the current filter.',
+                    ),
                   )
                 : ListView.separated(
-                    itemCount: _logs.length,
+                    itemCount: filteredLogs.length,
                     separatorBuilder: (_, _) => const SizedBox(height: 8),
                     itemBuilder: (context, index) {
-                      final item = _logs[index];
+                      final item = filteredLogs[index];
                       final msg =
                           item['message'] as Map<String, dynamic>? ??
                           const <String, dynamic>{};
