@@ -343,6 +343,12 @@ class _LogsPageState extends State<LogsPage> {
   bool _connecting = false;
   String? _error;
   int _selectedLogLevelFilter = 0;
+  final TextEditingController _logSearchController = TextEditingController();
+  String _logSearchQuery = '';
+  bool _loadingNodeFilterOptions = false;
+  String? _nodeFilterOptionsError;
+  List<String> _availableNodeFilterOptions = const [];
+  String _selectedNodeFilter = '';
   bool _isRecordingLogs = false;
   bool _savingRecording = false;
   String? _recordingRunId;
@@ -351,6 +357,7 @@ class _LogsPageState extends State<LogsPage> {
   @override
   void initState() {
     super.initState();
+    _loadNodeFilterOptions();
     _connect();
   }
 
@@ -360,6 +367,10 @@ class _LogsPageState extends State<LogsPage> {
     if (oldWidget.backendUrl != widget.backendUrl) {
       _logs.clear();
       _error = null;
+      _selectedNodeFilter = '';
+      _availableNodeFilterOptions = const [];
+      _nodeFilterOptionsError = null;
+      _loadNodeFilterOptions();
       _connect();
     }
   }
@@ -367,7 +378,61 @@ class _LogsPageState extends State<LogsPage> {
   @override
   void dispose() {
     _channel?.sink.close();
+    _logSearchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadNodeFilterOptions() async {
+    setState(() {
+      _loadingNodeFilterOptions = true;
+      _nodeFilterOptionsError = null;
+    });
+    try {
+      final nodes = await RosApi(widget.backendUrl).getNodes();
+      final names = nodes
+          .map((item) {
+            final namespace = (item['namespace'] as String? ?? '').trim();
+            final name = (item['name'] as String? ?? '').trim();
+            return _normalizeNodeDisplayName(namespace, name);
+          })
+          .where((name) => name.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loadingNodeFilterOptions = false;
+        _availableNodeFilterOptions = names;
+        if (_selectedNodeFilter.isNotEmpty &&
+            !_availableNodeFilterOptions.contains(_selectedNodeFilter)) {
+          _selectedNodeFilter = '';
+        }
+      });
+    } catch (err) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loadingNodeFilterOptions = false;
+        _nodeFilterOptionsError = err.toString();
+      });
+    }
+  }
+
+  String _normalizeNodeDisplayName(String namespace, String name) {
+    final ns = namespace.trim();
+    final node = name.trim();
+    if (node.isEmpty) {
+      return '';
+    }
+    if (ns.isEmpty || ns == '/') {
+      return node.startsWith('/') ? node : '/$node';
+    }
+    final cleanNs = ns.endsWith('/') ? ns.substring(0, ns.length - 1) : ns;
+    final cleanNode = node.startsWith('/') ? node.substring(1) : node;
+    return '$cleanNs/$cleanNode';
   }
 
   void _connect() {
@@ -526,6 +591,12 @@ class _LogsPageState extends State<LogsPage> {
     );
   }
 
+  String _nodeFilterKeyFromRosoutMessage(Map<String, dynamic> msg) {
+    final loggerName = msg['name']?.toString() ?? '';
+    final nodeInfo = _deriveNodeAndNamespace(loggerName);
+    return _normalizeNodeDisplayName(nodeInfo.namespace, nodeInfo.node);
+  }
+
   String _makeRecordingRunId() {
     final now = DateTime.now().toUtc();
     final ts =
@@ -636,12 +707,35 @@ class _LogsPageState extends State<LogsPage> {
   @override
   Widget build(BuildContext context) {
     final filteredLogs = _logs.where((item) {
-      if (_selectedLogLevelFilter <= 0) {
-        return true;
-      }
       final msg = item['message'] as Map<String, dynamic>?;
-      final level = (msg?['level'] as num?)?.toInt() ?? 0;
-      return level == _selectedLogLevelFilter;
+      if (msg == null) {
+        return false;
+      }
+
+      if (_selectedLogLevelFilter <= 0) {
+        // continue
+      } else {
+        final level = (msg['level'] as num?)?.toInt() ?? 0;
+        if (level != _selectedLogLevelFilter) {
+          return false;
+        }
+      }
+
+      if (_selectedNodeFilter.isNotEmpty) {
+        final nodeKey = _nodeFilterKeyFromRosoutMessage(msg);
+        if (nodeKey != _selectedNodeFilter) {
+          return false;
+        }
+      }
+
+      if (_logSearchQuery.isNotEmpty) {
+        final logText = (msg['msg']?.toString() ?? '').toLowerCase();
+        if (!logText.contains(_logSearchQuery)) {
+          return false;
+        }
+      }
+
+      return true;
     }).toList();
 
     return Padding(
@@ -708,6 +802,84 @@ class _LogsPageState extends State<LogsPage> {
                   },
                 ),
               ),
+              SizedBox(
+                width: 260,
+                child: DropdownButtonFormField<String>(
+                  value: _selectedNodeFilter,
+                  isDense: true,
+                  decoration: InputDecoration(
+                    labelText: 'Source node',
+                    border: const OutlineInputBorder(),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    suffixIcon: IconButton(
+                      tooltip: 'Refresh nodes',
+                      onPressed: _loadingNodeFilterOptions
+                          ? null
+                          : _loadNodeFilterOptions,
+                      icon: _loadingNodeFilterOptions
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh),
+                    ),
+                  ),
+                  items: [
+                    const DropdownMenuItem<String>(
+                      value: '',
+                      child: Text('All nodes'),
+                    ),
+                    ..._availableNodeFilterOptions.map(
+                      (nodeName) => DropdownMenuItem<String>(
+                        value: nodeName,
+                        child: Text(
+                          nodeName,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    setState(() {
+                      _selectedNodeFilter = value ?? '';
+                    });
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 280,
+                child: TextField(
+                  controller: _logSearchController,
+                  onChanged: (value) {
+                    setState(() {
+                      _logSearchQuery = value.trim().toLowerCase();
+                    });
+                  },
+                  decoration: InputDecoration(
+                    isDense: true,
+                    labelText: 'Search log message',
+                    hintText: 'Find terms inside msg text',
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _logSearchQuery.isNotEmpty
+                        ? IconButton(
+                            tooltip: 'Clear search',
+                            onPressed: () {
+                              _logSearchController.clear();
+                              setState(() {
+                                _logSearchQuery = '';
+                              });
+                            },
+                            icon: const Icon(Icons.close),
+                          )
+                        : null,
+                  ),
+                ),
+              ),
               ElevatedButton.icon(
                 onPressed: _isRecordingLogs || _savingRecording
                     ? null
@@ -742,6 +914,13 @@ class _LogsPageState extends State<LogsPage> {
                 'Showing ${filteredLogs.length}/${_logs.length}',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+              if (_nodeFilterOptionsError != null)
+                Text(
+                  'Node filter list error',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
               if (_isRecordingLogs || _savingRecording)
                 Text(
                   _savingRecording

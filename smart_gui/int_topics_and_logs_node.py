@@ -18,7 +18,7 @@ class IntTopicsAndLogsNode(Node):
     """Publish integers on multiple topics and generate ROS logs periodically."""
 
     def __init__(self, publish_hz: float = 5.0, log_hz: float = 1.0) -> None:
-        """Create publishers and timers.
+        """Create publishers and timers
 
         Args:
             publish_hz: Integer topic publish frequency in Hz.
