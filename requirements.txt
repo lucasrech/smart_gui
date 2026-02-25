@@ -1,9 +1,20 @@
+# smart_gui - Python dependencies
+#
+# Instala tudo necessário para:
+# - backend FastAPI/ROS (`smart_gui/ros_inspector_api.py`)
+# - nó de teste com tópicos Int + logs + vídeo (`smart_gui/int_topics_and_logs_node.py`)
+
+# Shared utilities (used by multiple modules)
+numpy
+
+# Backend API (smart_gui/ros_inspector_api.py)
 fastapi
 uvicorn[standard]
 wsproto
-numpy
 pillow
 pydantic
+
+# Test node with image/video topic (smart_gui/int_topics_and_logs_node.py)
 requests
 imageio
 imageio-ffmpeg

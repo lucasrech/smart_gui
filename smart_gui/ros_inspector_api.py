@@ -74,6 +74,22 @@ INTERNAL_TOPICS_HIDDEN_FROM_LIST = {
 }
 
 _ARRAY_TYPE_RE = re.compile(r"^(?P<base>.+)\[(?P<len>\d*)\]$")
+_ROS_PRIMITIVE_TYPES = {
+    "bool",
+    "int8",
+    "uint8",
+    "int16",
+    "uint16",
+    "int32",
+    "uint32",
+    "int64",
+    "uint64",
+    "float32",
+    "float64",
+    "string",
+    "byte",
+    "char",
+}
 
 
 def _normalize_ros_type_name(type_name: str) -> str:
@@ -150,8 +166,13 @@ def _coerce_value_for_slot(slot_type: str, value: Any) -> Any:
         return _make_time_from_dict(value)
     if slot_type == "duration" and isinstance(value, dict):
         return _make_duration_from_dict(value)
+    if slot_type in _ROS_PRIMITIVE_TYPES:
+        return value
 
-    nested_msg_cls = roslib.message.get_message_class(slot_type)
+    try:
+        nested_msg_cls = roslib.message.get_message_class(slot_type)
+    except Exception:
+        nested_msg_cls = None
     if nested_msg_cls is not None and isinstance(value, dict):
         nested = nested_msg_cls()
         _set_ros_message_fields(nested, value)
