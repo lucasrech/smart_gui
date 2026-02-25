@@ -150,7 +150,6 @@ class _TopicsList extends StatefulWidget {
 /// State for topic discovery list and related actions.
 class _TopicsListState extends State<_TopicsList> {
   late Future<List<Map<String, dynamic>>> _future;
-  Timer? _refreshTimer;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   final Set<String> _favoriteTopics = <String>{};
@@ -168,14 +167,10 @@ class _TopicsListState extends State<_TopicsList> {
   void initState() {
     super.initState();
     _future = RosApi(widget.backendUrl).getTopics();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      _refreshTopics();
-    });
   }
 
   @override
   void dispose() {
-    _refreshTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
