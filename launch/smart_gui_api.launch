@@ -1,0 +1,15 @@
+<launch>
+  <arg name="host" default="0.0.0.0" />
+  <arg name="port" default="8000" />
+  <arg name="run_frontend" default="true" />
+  <arg name="frontend_dir" default="" />
+  <arg name="frontend_command" default="flutter run -d web-server --web-hostname 0.0.0.0 --web-port 3000 --release" />
+
+  <node pkg="smart_gui" type="smart_gui_api" name="smart_gui_api" output="screen"
+        args="--host $(arg host) --port $(arg port)" />
+
+  <group if="$(arg run_frontend)">
+    <node pkg="smart_gui" type="smart_gui_frontend_runner" name="smart_gui_frontend" output="screen"
+          args="--frontend-dir '$(arg frontend_dir)' --frontend-command '$(arg frontend_command)'" />
+  </group>
+</launch>

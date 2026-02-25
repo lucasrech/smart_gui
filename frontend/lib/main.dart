@@ -22,6 +22,11 @@ void main() {
   runApp(const RosInspectorApp());
 }
 
+bool _isImageMessageType(String? type) {
+  final t = type?.trim() ?? '';
+  return t == 'sensor_msgs/Image';
+}
+
 /// Root `MaterialApp` widget and app-wide theme definition.
 class RosInspectorApp extends StatelessWidget {
   const RosInspectorApp({super.key});
@@ -70,7 +75,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ROS2 Smart GUI'),
+        title: const Text('ROS Smart GUI'),
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
@@ -326,7 +331,7 @@ class _TopicsListState extends State<_TopicsList> {
   }
 }
 
-/// Dedicated `/rosout` viewer for ROS 2 runtime logs.
+/// Dedicated `/rosout` viewer for ROS runtime logs.
 class LogsPage extends StatefulWidget {
   const LogsPage({super.key, required this.backendUrl});
 
@@ -336,7 +341,7 @@ class LogsPage extends StatefulWidget {
   State<LogsPage> createState() => _LogsPageState();
 }
 
-/// Connects to `/rosout` and renders incoming `rcl_interfaces/msg/Log` messages.
+/// Connects to `/rosout` and renders incoming log messages.
 class _LogsPageState extends State<LogsPage> {
   WebSocketChannel? _channel;
   final List<Map<String, dynamic>> _logs = [];
@@ -532,9 +537,15 @@ class _LogsPageState extends State<LogsPage> {
 
   String _formatStamp(Map<String, dynamic> msg) {
     try {
-      final stamp = msg['stamp'] as Map<String, dynamic>?;
-      final sec = (stamp?['sec'] as num?)?.toInt() ?? 0;
-      final nanosec = (stamp?['nanosec'] as num?)?.toInt() ?? 0;
+      final stamp = _extractLogStamp(msg);
+      final sec =
+          (stamp?['sec'] as num?)?.toInt() ??
+          (stamp?['secs'] as num?)?.toInt() ??
+          0;
+      final nanosec =
+          (stamp?['nanosec'] as num?)?.toInt() ??
+          (stamp?['nsecs'] as num?)?.toInt() ??
+          0;
       final millis = (sec * 1000) + (nanosec / 1000000).round();
       final dt = DateTime.fromMillisecondsSinceEpoch(
         millis,
@@ -552,9 +563,13 @@ class _LogsPageState extends State<LogsPage> {
 
   DateTime? _stampToUtcDateTime(Map<String, dynamic> msg) {
     try {
-      final stamp = msg['stamp'] as Map<String, dynamic>?;
-      final sec = (stamp?['sec'] as num?)?.toInt();
-      final nanosec = (stamp?['nanosec'] as num?)?.toInt();
+      final stamp = _extractLogStamp(msg);
+      final sec =
+          (stamp?['sec'] as num?)?.toInt() ??
+          (stamp?['secs'] as num?)?.toInt();
+      final nanosec =
+          (stamp?['nanosec'] as num?)?.toInt() ??
+          (stamp?['nsecs'] as num?)?.toInt();
       if (sec == null || nanosec == null) {
         return null;
       }
@@ -567,6 +582,21 @@ class _LogsPageState extends State<LogsPage> {
     } catch (_) {
       return null;
     }
+  }
+
+  Map<String, dynamic>? _extractLogStamp(Map<String, dynamic> msg) {
+    final direct = msg['stamp'];
+    if (direct is Map<String, dynamic>) {
+      return direct;
+    }
+    final header = msg['header'];
+    if (header is Map<String, dynamic>) {
+      final nestedStamp = header['stamp'];
+      if (nestedStamp is Map<String, dynamic>) {
+        return nestedStamp;
+      }
+    }
+    return null;
   }
 
   String _stampToUtcIsoString(Map<String, dynamic> msg) {
@@ -745,7 +775,7 @@ class _LogsPageState extends State<LogsPage> {
           Row(
             children: [
               Text(
-                'ROS 2 Execution Logs (/rosout)',
+                'ROS Execution Logs (/rosout)',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(width: 12),
@@ -1703,7 +1733,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
             _error = null;
             _connecting = false;
             _messages.insert(0, data);
-            if (data['type']?.toString() == 'sensor_msgs/msg/Image') {
+            if (_isImageMessageType(data['type']?.toString())) {
               if (_messages.length > 10) {
                 _messages.removeLast();
               }
@@ -1763,7 +1793,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
       return true;
     }
     final type = data['type']?.toString() ?? '';
-    if (type == 'sensor_msgs/msg/Image') {
+    if (_isImageMessageType(type)) {
       return true;
     }
     final now = DateTime.now();
@@ -2160,7 +2190,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
 
   bool _isImageTopic() {
     for (final msg in _messages) {
-      if (msg['type']?.toString() == 'sensor_msgs/msg/Image') {
+      if (_isImageMessageType(msg['type']?.toString())) {
         return true;
       }
     }
@@ -2212,7 +2242,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
 
   Map<String, dynamic>? _latestImageMessage() {
     for (final msg in _messages) {
-      if (msg['type']?.toString() != 'sensor_msgs/msg/Image') {
+      if (!_isImageMessageType(msg['type']?.toString())) {
         continue;
       }
       final payload = msg['message'];

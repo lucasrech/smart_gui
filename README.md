@@ -1,11 +1,13 @@
 # 🛰️ smart_gui
 
-[![ROS 2](https://img.shields.io/badge/ROS%202-Jazzy-22314E?logo=ros&logoColor=white)](https://docs.ros.org/)
+[![ROS](https://img.shields.io/badge/ROS-Noetic-22314E?logo=ros&logoColor=white)](https://wiki.ros.org/noetic)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Flutter Web](https://img.shields.io/badge/Flutter-Web-02569B?logo=flutter&logoColor=white)](https://flutter.dev/)
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)
 
-`smart_gui` is a ROS 2 (`ament_python`) package focused on monitoring and testing ROS systems through a web interface. It combines a FastAPI backend and a Flutter frontend to inspect the ROS graph, stream live topic data, call services, and publish messages (including backend-managed loop publishing) without requiring custom debug scripts.
+> Branch note: this README documents the `ros-noetic` branch (ROS 1 Noetic version).
+
+`smart_gui` is a ROS 1 Noetic (`catkin`) package focused on monitoring and testing ROS systems through a web interface. It combines a FastAPI backend and a Flutter frontend to inspect the ROS graph, stream live topic data, call services, and publish messages (including backend-managed loop publishing) without requiring custom debug scripts.
 
 ## ✨ Features
 
@@ -22,32 +24,32 @@
   - Start/stop backend publish loops (no per-message HTTP traffic from frontend).
 - Live topic monitor via WebSocket:
   - `WS /ws/topics/{topic}`
-- Special handling for `sensor_msgs/msg/Image`:
+- Special handling for `sensor_msgs/Image`:
   - Backend JPEG compression to reduce payload size.
 
 ## 🗂️ Repository Layout
 
-- `smart_gui/ros2_inspector_api.py`: main ROS2 + FastAPI backend node.
+- `smart_gui/ros_inspector_api.py`: main ROS Noetic + FastAPI backend node.
 - `frontend/`: Flutter web application.
-- `launch/smart_gui_api.launch.py`: launch backend and optional frontend process.
-- `smart_gui/random_int8_topics_node.py`: test node that publishes random `std_msgs/msg/Int8` on random topics.
+- `launch/smart_gui_api.launch`: ROS1 roslaunch file for backend and optional frontend process.
+- `smart_gui/random_int8_topics_node.py`: test node that publishes random `std_msgs/Int8` on random topics.
 
 ## 📦 Requirements
 
-- ROS 2 Jazzy (or compatible environment with `rclpy`).
-- `colcon`.
+- ROS Noetic (with `rospy`).
+- `catkin` workspace (`catkin_make` or `catkin_tools`).
 - Python 3.
 - Flutter (only if you want to run the web frontend with `flutter run`).
 
 ## 🛠️ Build
 
-From your ROS 2 workspace root:
+From your ROS1 catkin workspace root:
 
 ```bash
-cd ~/colcon_ws
-source /opt/ros/jazzy/setup.bash
-colcon build --packages-select smart_gui --symlink-install
-source install/setup.bash
+cd ~/catkin_ws
+source /opt/ros/noetic/setup.bash
+catkin_make
+source devel/setup.bash
 ```
 
 ## ▶️ Run
@@ -55,7 +57,7 @@ source install/setup.bash
 ### 1) Backend + frontend together (recommended for development)
 
 ```bash
-ros2 launch smart_gui smart_gui_api.launch.py \
+roslaunch smart_gui smart_gui_api.launch \
   frontend_command:='NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 flutter run -d web-server --web-hostname 0.0.0.0 --web-port 3000 --profile'
 ```
 
@@ -66,13 +68,13 @@ Open:
 ### 2) Backend only
 
 ```bash
-ros2 launch smart_gui smart_gui_api.launch.py run_frontend:=false
+roslaunch smart_gui smart_gui_api.launch run_frontend:=false
 ```
 
 ### 3) Backend only (direct run)
 
 ```bash
-ros2 run smart_gui smart_gui_api --host 0.0.0.0 --port 8000
+rosrun smart_gui smart_gui_api --host 0.0.0.0 --port 8000
 ```
 
 ## 🔌 API Endpoints
@@ -85,7 +87,7 @@ ros2 run smart_gui smart_gui_api --host 0.0.0.0 --port 8000
 
 ### Topic message types/templates
 - `GET /topic-message-types`
-- `GET /topic-message-template?message_type=<pkg/msg/Type>`
+- `GET /topic-message-template?message_type=<pkg/Type>`
 
 ### Topic publish control
 - `POST /topic-publisher`
@@ -94,7 +96,7 @@ ros2 run smart_gui smart_gui_api --host 0.0.0.0 --port 8000
 - `POST /topic-publish-loop/stop`
 
 ### Services
-- `GET /service-schema?name=<service>&service_type=<pkg/srv/Type>`
+- `GET /service-schema?name=<service>&service_type=<pkg/Type>`
 - `POST /service-call`
 
 ### WebSocket
@@ -111,7 +113,7 @@ curl -X POST http://127.0.0.1:8000/topic-publish-loop/start \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "/demo_int",
-    "message_type": "std_msgs/msg/Int32",
+    "message_type": "std_msgs/Int32",
     "message": {"data": 10},
     "frequency_hz": 5.0
   }'
@@ -124,7 +126,7 @@ curl -X POST http://127.0.0.1:8000/topic-publish-loop/stop \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "/demo_int",
-    "message_type": "std_msgs/msg/Int32"
+    "message_type": "std_msgs/Int32"
   }'
 ```
 
@@ -133,13 +135,13 @@ curl -X POST http://127.0.0.1:8000/topic-publish-loop/stop \
 Run a helper node that creates random topic names and publishes random `Int8` values:
 
 ```bash
-ros2 run smart_gui random_int8_topics
+rosrun smart_gui random_int8_topics
 ```
 
 Optional arguments:
 
 ```bash
-ros2 run smart_gui random_int8_topics --topic-count 5 --hz 5.0
+rosrun smart_gui random_int8_topics --topic-count 5 --hz 5.0
 ```
 
 ## 📱 Notes for Mobile/LAN Access

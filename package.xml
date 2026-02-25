@@ -1,24 +1,31 @@
 <?xml version="1.0"?>
-<package format="3">
+<package format="2">
   <name>smart_gui</name>
   <version>0.1.0</version>
-  <description>ROS 2 package for Smart GUI backend API.</description>
+  <description>ROS Noetic package for Smart GUI backend API and web frontend integration.</description>
+
   <maintainer email="rech@todo.todo">rech</maintainer>
   <license>Apache-2.0</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
+  <buildtool_depend>catkin</buildtool_depend>
 
-  <depend>rclpy</depend>
-  <depend>rosidl_runtime_py</depend>
+  <depend>rospy</depend>
+  <depend>rosgraph</depend>
+  <depend>rosgraph_msgs</depend>
+  <depend>roscpp</depend>
+  <depend>roslib</depend>
   <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
 
   <exec_depend>python3-fastapi</exec_depend>
   <exec_depend>python3-uvicorn</exec_depend>
   <exec_depend>python3-wsproto</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-pil</exec_depend>
+  <exec_depend>python3-pydantic</exec_depend>
 
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>catkin</build_type>
   </export>
 </package>

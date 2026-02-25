@@ -1,1 +1,1 @@
-"""Smart GUI ROS 2 package."""
+"""Smart GUI ROS package."""

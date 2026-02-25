@@ -1,4 +1,4 @@
 fastapi
 uvicorn[standard]
 wsproto
-rosidl-runtime-py
+pydantic
