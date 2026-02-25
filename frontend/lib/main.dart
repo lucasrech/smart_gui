@@ -1665,10 +1665,24 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
   DateTime? _selfTrafficIgnoreUntil;
   bool _ownLoopActive = false;
   DateTime? _lastRenderedTopicMessageAt;
+  final Set<String> _knownActiveLoopKeys = <String>{};
+
+  String _loopKey({String? topicName, String? topicType}) {
+    final name = topicName ?? widget.topicName;
+    final type = topicType ?? widget.topicType;
+    return '$name::$type';
+  }
+
+  void _syncLoopUiForCurrentTopic() {
+    final isActive = _knownActiveLoopKeys.contains(_loopKey());
+    _looping = isActive;
+    _ownLoopActive = isActive;
+  }
 
   @override
   void initState() {
     super.initState();
+    _syncLoopUiForCurrentTopic();
     _connect();
     _loadTemplate();
   }
@@ -1678,17 +1692,11 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.topicName != widget.topicName ||
         oldWidget.backendUrl != widget.backendUrl) {
-      if (_looping) {
-        unawaited(
-          _stopLoopPublishingForTopic(
-            topicName: oldWidget.topicName,
-            topicType: oldWidget.topicType,
-            updateState: false,
-          ),
-        );
+      if (oldWidget.backendUrl != widget.backendUrl) {
+        _knownActiveLoopKeys.clear();
       }
       _clearTopicTrafficState();
-      _ownLoopActive = false;
+      _syncLoopUiForCurrentTopic();
       _lastRenderedTopicMessageAt = null;
       _messages.clear();
       _error = null;
@@ -1706,15 +1714,6 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
 
   @override
   void dispose() {
-    if (_looping) {
-      unawaited(
-        _stopLoopPublishingForTopic(
-          topicName: widget.topicName,
-          topicType: widget.topicType,
-          updateState: false,
-        ),
-      );
-    }
     _topicTrafficTimer?.cancel();
     _loopFrequencyController.dispose();
     _channel?.sink.close();
@@ -1914,6 +1913,7 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
         return;
       }
       setState(() {
+        _knownActiveLoopKeys.add(_loopKey());
         _looping = true;
         _ownLoopActive = true;
         _topicBusyByExternalTraffic = false;
@@ -1958,9 +1958,10 @@ class _TopicMessagesPaneState extends State<TopicMessagesPane> {
     bool updateState = true,
   }) async {
     // Stop loop remotely in backend and synchronize local UI state.
-    final wasLooping = _looping;
-    _looping = false;
-    _ownLoopActive = false;
+    final targetKey = _loopKey(topicName: topicName, topicType: topicType);
+    final wasLooping = _knownActiveLoopKeys.contains(targetKey);
+    _knownActiveLoopKeys.remove(targetKey);
+    _syncLoopUiForCurrentTopic();
     _armSelfTrafficIgnore();
     if (!updateState || !mounted) {
       if (!wasLooping || topicType.isEmpty) {
