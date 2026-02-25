@@ -150,18 +150,32 @@ class _TopicsList extends StatefulWidget {
 /// State for topic discovery list and related actions.
 class _TopicsListState extends State<_TopicsList> {
   late Future<List<Map<String, dynamic>>> _future;
+  Timer? _refreshTimer;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   final Set<String> _favoriteTopics = <String>{};
+
+  void _refreshTopics() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _future = RosApi(widget.backendUrl).getTopics();
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     _future = RosApi(widget.backendUrl).getTopics();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _refreshTopics();
+    });
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -170,9 +184,7 @@ class _TopicsListState extends State<_TopicsList> {
   void didUpdateWidget(covariant _TopicsList oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.backendUrl != widget.backendUrl) {
-      setState(() {
-        _future = RosApi(widget.backendUrl).getTopics();
-      });
+      _refreshTopics();
     }
   }
 
@@ -184,9 +196,7 @@ class _TopicsListState extends State<_TopicsList> {
     if (!mounted || created == null) {
       return;
     }
-    setState(() {
-      _future = RosApi(widget.backendUrl).getTopics();
-    });
+    _refreshTopics();
     widget.onSelect(created);
   }
 
@@ -229,11 +239,7 @@ class _TopicsListState extends State<_TopicsList> {
               const SizedBox(width: 8),
               IconButton(
                 tooltip: 'Refresh',
-                onPressed: () {
-                  setState(() {
-                    _future = RosApi(widget.backendUrl).getTopics();
-                  });
-                },
+                onPressed: _refreshTopics,
                 icon: const Icon(Icons.refresh),
               ),
               IconButton(
@@ -516,22 +522,42 @@ class _LogsPageState extends State<LogsPage> {
     return _severityLabel(level);
   }
 
+  int _normalizeRosLogLevel(int level) {
+    // Support both ROS1 (/rosout: 1/2/4/8/16) and ROS2-style (10/20/30/40/50).
+    switch (level) {
+      case 1:
+        return 10;
+      case 2:
+        return 20;
+      case 4:
+        return 30;
+      case 8:
+        return 40;
+      case 16:
+        return 50;
+      default:
+        return level;
+    }
+  }
+
   String _severityLabel(int level) {
-    if (level >= 50) return 'FATAL';
-    if (level >= 40) return 'ERROR';
-    if (level >= 30) return 'WARN';
-    if (level >= 20) return 'INFO';
-    if (level >= 10) return 'DEBUG';
+    final normalized = _normalizeRosLogLevel(level);
+    if (normalized >= 50) return 'FATAL';
+    if (normalized >= 40) return 'ERROR';
+    if (normalized >= 30) return 'WARN';
+    if (normalized >= 20) return 'INFO';
+    if (normalized >= 10) return 'DEBUG';
     return 'LOG';
   }
 
   Color _levelColor(BuildContext context, int level) {
     final scheme = Theme.of(context).colorScheme;
-    if (level >= 50) return const Color(0xFF8B0000);
-    if (level >= 40) return scheme.error;
-    if (level >= 30) return const Color(0xFFB26A00);
-    if (level >= 20) return const Color(0xFF0B6E4F);
-    if (level >= 10) return scheme.primary;
+    final normalized = _normalizeRosLogLevel(level);
+    if (normalized >= 50) return const Color(0xFF8B0000);
+    if (normalized >= 40) return scheme.error;
+    if (normalized >= 30) return const Color(0xFFB26A00);
+    if (normalized >= 20) return const Color(0xFF0B6E4F);
+    if (normalized >= 10) return scheme.primary;
     return scheme.secondary;
   }
 
@@ -746,7 +772,7 @@ class _LogsPageState extends State<LogsPage> {
         // continue
       } else {
         final level = (msg['level'] as num?)?.toInt() ?? 0;
-        if (level != _selectedLogLevelFilter) {
+        if (_normalizeRosLogLevel(level) != _selectedLogLevelFilter) {
           return false;
         }
       }

@@ -251,12 +251,33 @@ class RosNoeticManager:
         except Exception:
             return {}
 
+    def _topics_with_active_publishers(self) -> Optional[set]:
+        """Return topics that currently have at least one publisher registered."""
+        if self._master is None:
+            return None
+        try:
+            system_state = self._master.getSystemState()
+            publishers = system_state[0] if isinstance(system_state, (list, tuple)) and len(system_state) >= 1 else []
+            active = set()
+            for entry in publishers:
+                if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+                    continue
+                topic_name, node_names = entry[0], entry[1]
+                if topic_name and isinstance(node_names, (list, tuple)) and len(node_names) > 0:
+                    active.add(topic_name)
+            return active
+        except Exception:
+            return None
+
     def list_topics(self, include_hidden_internal: bool = False) -> List[Dict[str, Any]]:
         """Return ROS topics and their advertised message types."""
         topic_types = self._topic_types_map()
+        active_publisher_topics = self._topics_with_active_publishers()
         topics = []
         for name in sorted(topic_types.keys()):
             if not include_hidden_internal and name in INTERNAL_TOPICS_HIDDEN_FROM_LIST:
+                continue
+            if active_publisher_topics is not None and name not in active_publisher_topics:
                 continue
             topics.append({"name": name, "types": [topic_types[name]]})
         return topics

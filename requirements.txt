@@ -4,3 +4,6 @@ wsproto
 numpy
 pillow
 pydantic
+requests
+imageio
+imageio-ffmpeg
